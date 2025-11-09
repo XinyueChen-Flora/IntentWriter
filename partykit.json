@@ -1,0 +1,11 @@
+{
+  "name": "intent-writer",
+  "main": "party/server.ts",
+  "compatibilityDate": "2025-11-09",
+  "serve": {
+    "build": ".next"
+  },
+  "vars": {
+    "NODE_ENV": "production"
+  }
+}
