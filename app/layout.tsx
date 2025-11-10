@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import LinkifyWarningSuppress from "@/components/LinkifyWarningSuppress";
+import LinkifyWarningSuppress from "@/components/common/LinkifyWarningSuppress";
 
 export const metadata: Metadata = {
   title: "Intent Writer - Collaborative Writing with Intent Alignment",

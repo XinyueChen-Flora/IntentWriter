@@ -1,6 +1,6 @@
 "use client";
 
-import CollaborativeEditor from "@/components/CollaborativeEditor";
+import CollaborativeEditor from "@/components/editor/CollaborativeEditor";
 import type { User } from "@supabase/supabase-js";
 import { Suspense } from "react";
 

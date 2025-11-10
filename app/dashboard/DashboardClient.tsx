@@ -18,7 +18,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Check, Copy, Plus, LogIn, Share2, Trash2 } from "lucide-react";
-import UserAvatar from "@/components/UserAvatar";
+import UserAvatar from "@/components/user/UserAvatar";
 
 type Document = {
   id: string;

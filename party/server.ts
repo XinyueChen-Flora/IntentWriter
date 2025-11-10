@@ -9,6 +9,7 @@ export type WritingBlock = {
   linkedIntentId: string | null;
   createdAt: number;
   updatedAt: number;
+  alignmentResult?: any; // Stores the AI alignment analysis result
 };
 
 export type IntentBlock = {
@@ -229,6 +230,24 @@ export default class WritingRoomServer implements Party.Server {
         state.writingBlocks = state.writingBlocks.filter(
           (b) => b.id !== data.blockId
         );
+        await this.room.storage.put("state", state);
+        this.room.broadcast(message, [sender.id]);
+        break;
+      }
+
+      case "update_writing_block": {
+        const state = await this.room.storage.get<RoomState>("state");
+        if (!state) return;
+
+        const index = state.writingBlocks.findIndex((b) => b.id === data.blockId);
+        if (index !== -1) {
+          state.writingBlocks[index] = {
+            ...state.writingBlocks[index],
+            ...data.updates,
+            updatedAt: Date.now(),
+          };
+        }
+
         await this.room.storage.put("state", state);
         this.room.broadcast(message, [sender.id]);
         break;

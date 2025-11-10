@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import usePartySocket from "partysocket/react";
+import type { AACUDimension } from "./aacuFramework";
 
 // Define types for your storage
 export type WritingBlock = {
@@ -11,6 +12,7 @@ export type WritingBlock = {
   linkedIntentId: string | null;
   createdAt: number;
   updatedAt: number;
+  alignmentResult?: any; // Stores the AI alignment analysis result
 };
 
 export type IntentBlock = {
@@ -53,6 +55,8 @@ export type RuleBlock = {
   createdAt: number;
   updatedAt: number;
   position: number; // For ordering
+  dimension?: AACUDimension; // AAC&U dimension category (optional)
+  sourceRubric?: string; // Original rubric text that generated this rule (optional)
 };
 
 export type RoomState = {
@@ -164,6 +168,18 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
             ...prev,
             writingBlocks: prev.writingBlocks.filter((b) => b.id !== data.blockId),
           }));
+          break;
+        case "update_writing_block":
+          setState((prev) => {
+            const index = prev.writingBlocks.findIndex((b) => b.id === data.blockId);
+            if (index === -1) return prev;
+            const newBlocks = [...prev.writingBlocks];
+            newBlocks[index] = {
+              ...newBlocks[index],
+              ...data.updates,
+            };
+            return { ...prev, writingBlocks: newBlocks };
+          });
           break;
         case "add_rule_block":
           setState((prev) => ({
@@ -291,6 +307,31 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
     [socket]
   );
 
+  const updateWritingBlock = useCallback(
+    (blockId: string, updates: Partial<WritingBlock>) => {
+      if (!socket) return;
+      socket.send(
+        JSON.stringify({
+          type: "update_writing_block",
+          blockId,
+          updates,
+        })
+      );
+      // Optimistic update
+      setState((prev) => {
+        const index = prev.writingBlocks.findIndex((b) => b.id === blockId);
+        if (index === -1) return prev;
+        const newBlocks = [...prev.writingBlocks];
+        newBlocks[index] = {
+          ...newBlocks[index],
+          ...updates,
+        };
+        return { ...prev, writingBlocks: newBlocks };
+      });
+    },
+    [socket]
+  );
+
   const addRuleBlock = useCallback(
     (block: RuleBlock) => {
       if (!socket) return;
@@ -360,6 +401,7 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
     addIntentBlock,
     deleteIntentBlock,
     addWritingBlock,
+    updateWritingBlock,
     deleteWritingBlock,
     addRuleBlock,
     updateRuleBlock,
