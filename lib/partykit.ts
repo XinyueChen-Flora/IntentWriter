@@ -89,7 +89,11 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
     party: "main",
     room: roomId,
     onOpen() {
+      console.log(`[PartyKit Client] ========== CONNECTION OPENED ==========`);
       console.log(`[PartyKit Client] Connected to room: ${roomId}`);
+      console.log(`[PartyKit Client] User ID: ${user?.id}`);
+      console.log(`[PartyKit Client] Connection time: ${new Date().toISOString()}`);
+      console.log(`[PartyKit Client] =========================================`);
       setIsConnected(true);
 
       // Send user identification to server
@@ -123,11 +127,22 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
         intentBlocks: data.state?.intentBlocks?.length || 0,
         writingBlocks: data.state?.writingBlocks?.length || 0,
         ruleBlocks: data.state?.ruleBlocks?.length || 0,
-      } : '');
+      } : '', `at ${new Date().toISOString()}`);
 
       switch (data.type) {
         case "sync":
-          console.log(`[PartyKit Client] Setting state from sync:`, data.state);
+          console.log(`[PartyKit Client] ========== SYNC MESSAGE RECEIVED ==========`);
+          console.log(`[PartyKit Client] Setting state from sync:`, {
+            intentBlocks: data.state?.intentBlocks?.length || 0,
+            writingBlocks: data.state?.writingBlocks?.length || 0,
+            writingBlocksWithAlignment: data.state?.writingBlocks?.filter((wb: any) => wb.alignmentResult).length || 0,
+            writingBlockDetails: data.state?.writingBlocks?.map((wb: any) => ({
+              id: wb.id.substring(0, 20),
+              linkedIntentId: wb.linkedIntentId?.substring(0, 20),
+              hasAlignment: !!wb.alignmentResult
+            }))
+          });
+          console.log(`[PartyKit Client] ==========================================`);
           setState(data.state);
           break;
         case "online_users":
@@ -170,14 +185,37 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
           }));
           break;
         case "update_writing_block":
+          console.log('[PartyKit Client] Received update_writing_block broadcast:', {
+            blockId: data.blockId,
+            hasAlignmentResult: !!data.updates.alignmentResult,
+            alignmentResultKeys: data.updates.alignmentResult ? Object.keys(data.updates.alignmentResult) : [],
+            timestamp: new Date().toISOString()
+          });
           setState((prev) => {
             const index = prev.writingBlocks.findIndex((b) => b.id === data.blockId);
-            if (index === -1) return prev;
+            if (index === -1) {
+              console.log('[PartyKit Client] ✗ Block not found in broadcast update:', data.blockId);
+              console.log('[PartyKit Client] Available blocks:', prev.writingBlocks.map(b => ({
+                id: b.id,
+                linkedIntentId: b.linkedIntentId
+              })));
+              return prev;
+            }
+            const oldBlock = prev.writingBlocks[index];
             const newBlocks = [...prev.writingBlocks];
             newBlocks[index] = {
               ...newBlocks[index],
               ...data.updates,
             };
+            console.log('[PartyKit Client] ✓ Broadcast update applied:', {
+              blockId: data.blockId,
+              index,
+              linkedIntentId: newBlocks[index].linkedIntentId,
+              hadAlignmentResult: !!oldBlock.alignmentResult,
+              hasAlignmentResultNow: !!newBlocks[index].alignmentResult,
+              totalBlocksInState: prev.writingBlocks.length,
+              timestamp: new Date().toISOString()
+            });
             return { ...prev, writingBlocks: newBlocks };
           });
           break;
@@ -310,6 +348,14 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
   const updateWritingBlock = useCallback(
     (blockId: string, updates: Partial<WritingBlock>) => {
       if (!socket) return;
+
+      console.log('[PartyKit Client] updateWritingBlock called:', {
+        blockId: blockId.substring(0, 20),
+        hasAlignmentResult: !!updates.alignmentResult,
+        alignmentResultKeys: updates.alignmentResult ? Object.keys(updates.alignmentResult) : [],
+        updateKeys: Object.keys(updates)
+      });
+
       socket.send(
         JSON.stringify({
           type: "update_writing_block",
@@ -317,15 +363,24 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
           updates,
         })
       );
+
       // Optimistic update
       setState((prev) => {
         const index = prev.writingBlocks.findIndex((b) => b.id === blockId);
-        if (index === -1) return prev;
+        if (index === -1) {
+          console.log('[PartyKit Client] ✗ Block not found for optimistic update:', blockId.substring(0, 20));
+          return prev;
+        }
         const newBlocks = [...prev.writingBlocks];
         newBlocks[index] = {
           ...newBlocks[index],
           ...updates,
         };
+        console.log('[PartyKit Client] ✓ Optimistic update applied:', {
+          blockId: blockId.substring(0, 20),
+          hadAlignmentResult: !!prev.writingBlocks[index].alignmentResult,
+          hasAlignmentResultNow: !!newBlocks[index].alignmentResult
+        });
         return { ...prev, writingBlocks: newBlocks };
       });
     },

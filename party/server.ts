@@ -122,6 +122,17 @@ export default class WritingRoomServer implements Party.Server {
     // Send current state to the newly connected client
     const state = await this.room.storage.get<RoomState>("state");
 
+    console.log('[Server] onConnect - Sending sync to new client:', {
+      writingBlocksCount: state?.writingBlocks?.length || 0,
+      writingBlocksWithAlignment: state?.writingBlocks?.filter(wb => wb.alignmentResult).length || 0,
+      writingBlockDetails: state?.writingBlocks?.map(wb => ({
+        id: wb.id.substring(0, 20),
+        linkedIntentId: wb.linkedIntentId?.substring(0, 20),
+        hasAlignmentResult: !!wb.alignmentResult,
+        alignmentResultKeys: wb.alignmentResult ? Object.keys(wb.alignmentResult) : []
+      })) || []
+    });
+
     conn.send(
       JSON.stringify({
         type: "sync",
@@ -236,16 +247,34 @@ export default class WritingRoomServer implements Party.Server {
       }
 
       case "update_writing_block": {
+        console.log('[Server] update_writing_block:', {
+          blockId: data.blockId,
+          updates: data.updates,
+          hasAlignmentResult: !!data.updates.alignmentResult,
+          alignmentResultKeys: data.updates.alignmentResult ? Object.keys(data.updates.alignmentResult) : []
+        });
+
         const state = await this.room.storage.get<RoomState>("state");
-        if (!state) return;
+        if (!state) {
+          console.log('[Server] No state found');
+          return;
+        }
 
         const index = state.writingBlocks.findIndex((b) => b.id === data.blockId);
+        console.log('[Server] Found block at index:', index);
+
         if (index !== -1) {
+          const oldBlock = state.writingBlocks[index];
           state.writingBlocks[index] = {
-            ...state.writingBlocks[index],
+            ...oldBlock,
             ...data.updates,
             updatedAt: Date.now(),
           };
+          console.log('[Server] Updated block:', {
+            blockId: data.blockId,
+            hadAlignmentResult: !!oldBlock.alignmentResult,
+            hasAlignmentResultNow: !!state.writingBlocks[index].alignmentResult
+          });
         }
 
         await this.room.storage.put("state", state);

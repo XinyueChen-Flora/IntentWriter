@@ -4,8 +4,8 @@ import type { IntentBlock, WritingBlock } from "@/lib/partykit";
 import type { User } from "@supabase/supabase-js";
 import type { AlignmentResult } from "../editor/WritingEditor";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronRight, Trash2, Lightbulb, UserPlus, X, ChevronLeft, ChevronRightIcon, Plus, GripVertical } from "lucide-react";
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { ChevronDown, ChevronRight, Trash2, Lightbulb, UserPlus, X, ChevronLeft, Plus, GripVertical } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
 import ImportMarkdownDialog from "../editor/ImportMarkdownDialog";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -13,22 +13,20 @@ import UserAvatar from "../user/UserAvatar";
 import {
   DndContext,
   closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  DragEndEvent,
   DragOverlay,
-  DragStartEvent,
 } from '@dnd-kit/core';
 import {
-  arrayMove,
   SortableContext,
-  sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+
+// Import custom hooks
+import { useIntentDragDrop } from './hooks/useIntentDragDrop';
+import { useIntentCoverage } from './hooks/useIntentCoverage';
+import { useIntentSuggestions } from './hooks/useIntentSuggestions';
+import { useIntentHierarchy } from './hooks/useIntentHierarchy';
 
 type IntentPanelProps = {
   blocks: readonly IntentBlock[];
@@ -57,11 +55,9 @@ type IntentPanelProps = {
 function SortableBlockItem({
   id,
   children,
-  isDragging,
 }: {
   id: string;
   children: React.ReactNode;
-  isDragging?: boolean;
 }) {
   const {
     attributes,
@@ -85,7 +81,7 @@ function SortableBlockItem({
           <button
             {...attributes}
             {...listeners}
-            className="flex-shrink-0 mt-2 opacity-0 group-hover/sortable:opacity-100 hover:bg-secondary rounded p-1 cursor-grab active:cursor-grabbing transition-opacity"
+            className="flex-shrink-0 mt-2 opacity-30 group-hover/sortable:opacity-100 hover:bg-secondary rounded p-1 cursor-grab active:cursor-grabbing transition-opacity"
             aria-label="Drag to reorder"
           >
             <GripVertical className="h-4 w-4 text-muted-foreground" />
@@ -161,219 +157,41 @@ export default function IntentPanel({
   onHoverIntent,
   activeIntentId,
 }: IntentPanelProps) {
+  // Local UI state
   const [collapsedBlocks, setCollapsedBlocks] = useState<Set<string>>(new Set());
   const [editingBlock, setEditingBlock] = useState<string | null>(null);
   const [editingIntent, setEditingIntent] = useState<string | null>(null);
   const [hoveredBlock, setHoveredBlock] = useState<string | null>(null);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8,
-      },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
-  );
+  // Use custom hooks
+  const dragDrop = useIntentDragDrop({ blocks, reorderBlocks });
+  const coverage = useIntentCoverage({ alignmentResults });
+  const suggestions = useIntentSuggestions({
+    alignmentResults,
+    blocks,
+    addBlock,
+    updateBlock,
+    setSelectedBlockId,
+    setEditingBlock,
+  });
+  const hierarchy = useIntentHierarchy({
+    blocks,
+    alignmentResults,
+    acceptedSuggestions: suggestions.acceptedSuggestions,
+  });
 
-  const handleDragStart = (event: DragStartEvent) => {
-    setActiveId(event.active.id as string);
-  };
-
-  const handleDragOver = (event: any) => {
-    const { over } = event;
-    if (over) {
-      setDragOverId(over.id as string);
-    }
-  };
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-
-    if (over && active.id !== over.id) {
-      const activeBlock = blocks.find(b => b.id === active.id);
-      const overBlock = blocks.find(b => b.id === over.id);
-
-      if (activeBlock && overBlock) {
-        // Get the flat list of all blocks in display order
-        const allBlocks = [...blocks].sort((a, b) => a.position - b.position);
-        const activeIndex = allBlocks.findIndex(b => b.id === active.id);
-        const overIndex = allBlocks.findIndex(b => b.id === over.id);
-
-        // If dragging down, insert after. If dragging up, insert before.
-        const position = activeIndex < overIndex ? 'after' : 'before';
-
-        reorderBlocks(active.id as string, over.id as string, position);
-      }
-    }
-
-    setActiveId(null);
-    setDragOverId(null);
-  };
-
-  // Helper: Flatten intentTree to get all intents
-  const flattenIntentTree = useCallback((nodes: any[]): any[] => {
-    const result: any[] = [];
-    nodes.forEach(node => {
-      result.push(node);
-      if (node.children && node.children.length > 0) {
-        result.push(...flattenIntentTree(node.children));
-      }
-    });
-    return result;
-  }, []);
-
-  // Get coverage status for an intent from Intent Tree
-  const getCoverageStatus = useCallback((intentId: string): "covered" | "partial" | "misaligned" | "missing-not-started" | "missing-skipped" | null => {
-    if (!alignmentResults) return null;
-
-    // Search through all alignment results for this intent
-    for (const [rootIntentId, result] of alignmentResults.entries()) {
-      if (!result.intentTree) continue;
-
-      // Flatten tree to find intent
-      const allIntents = flattenIntentTree(result.intentTree);
-      const intent = allIntents.find((node: any) => node.intentId === intentId);
-
-      if (intent) {
-        return intent.status;
-      }
-    }
-
-    return null;
-  }, [alignmentResults, flattenIntentTree]);
-
-  // Get full coverage details for an intent from Intent Tree
-  const getCoverageDetails = useCallback((intentId: string): any => {
-    if (!alignmentResults) return null;
-
-    for (const [rootIntentId, result] of alignmentResults.entries()) {
-      if (!result.intentTree) continue;
-
-      // Flatten tree to find intent
-      const allIntents = flattenIntentTree(result.intentTree);
-      const intent = allIntents.find(node => node.intentId === intentId);
-
-      if (intent) {
-        return intent; // Return the full intent node with all details
-      }
-    }
-
-    return null;
-  }, [alignmentResults, flattenIntentTree]);
-
-  // Tooltip state for coverage info
-  const [coverageTooltip, setCoverageTooltip] = useState<{
-    x: number;
-    y: number;
-    coverage: any;
-  } | null>(null);
-  const coverageTooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const isHoveringCoverageTooltipRef = useRef(false);
-
-  // Cleanup tooltip timeout on unmount
+  // Debug: log when blocks change
   useEffect(() => {
-    return () => {
-      if (coverageTooltipTimeoutRef.current) {
-        clearTimeout(coverageTooltipTimeoutRef.current);
-      }
-    };
-  }, []);
+    console.log('[IntentPanel] blocks updated, count:', blocks.length, 'rootBlocks:', hierarchy.rootBlocks.length);
+    const rootBlockPositions = hierarchy.rootBlocks.map(b => ({ id: b.id, content: b.content.substring(0, 20), position: b.position }));
+    console.log('[IntentPanel] Root block positions:', rootBlockPositions);
+  }, [blocks, hierarchy.rootBlocks]);
 
-  // Count extra content (suggested intents) across all alignment results
-  const extraContentCount = useMemo(() => {
-    if (!alignmentResults) return 0;
-    let count = 0;
-    for (const result of alignmentResults.values()) {
-      if (result.intentTree) {
-        // Flatten tree and count suggested intents (extra content)
-        const allIntents = flattenIntentTree(result.intentTree);
-        count += allIntents.filter((intent: any) => intent.isSuggested || intent.status === 'extra').length;
-      }
-    }
-    return count;
-  }, [alignmentResults, flattenIntentTree]);
-
-  // Extract all suggested intents with their positions in the tree structure
-  const suggestedIntents = useMemo(() => {
-    if (!alignmentResults) return [];
-    const suggested: any[] = [];
-
-    for (const result of alignmentResults.values()) {
-      if (result.intentTree) {
-        // Recursively extract suggested intents while preserving tree position
-        const extractSuggested = (nodes: any[], parentPath: Array<string | number> = []): void => {
-          nodes.forEach((node, index) => {
-            if (node.isSuggested || node.status === 'extra') {
-              suggested.push({
-                ...node,
-                treePath: [...parentPath, index], // Track position in tree
-              });
-            }
-            if (node.children && node.children.length > 0) {
-              extractSuggested(node.children, [...parentPath, index, 'children']);
-            }
-          });
-        };
-
-        extractSuggested(result.intentTree);
-      }
-    }
-
-    return suggested;
-  }, [alignmentResults]);
-
+  // Simple add block handler
   const handleAddBlock = () => {
     const newBlock = addBlock();
     setSelectedBlockId(newBlock.id);
     setEditingBlock(newBlock.id);
-  };
-
-  // Accept a suggested intent: convert it to a real intent block
-  const handleAcceptSuggested = (suggestedIntent: any) => {
-    console.log('[Accept Suggested] Full suggested intent:', suggestedIntent);
-    console.log('[Accept Suggested] insertPosition:', suggestedIntent.insertPosition);
-
-    // Use the structured insertPosition metadata if available
-    if (suggestedIntent.insertPosition) {
-      const { parentIntentId, beforeIntentId, afterIntentId } = suggestedIntent.insertPosition;
-
-      console.log('[Accept Suggested] Position IDs:', { parentIntentId, beforeIntentId, afterIntentId });
-
-      const insertionOptions: any = {};
-
-      // Determine insertion position based on structured metadata
-      if (beforeIntentId) {
-        insertionOptions.beforeBlockId = beforeIntentId;
-        console.log('[Accept Suggested] Using beforeBlockId:', beforeIntentId);
-      } else if (afterIntentId) {
-        insertionOptions.afterBlockId = afterIntentId;
-        console.log('[Accept Suggested] Using afterBlockId:', afterIntentId);
-      } else if (parentIntentId) {
-        insertionOptions.asChildOf = parentIntentId;
-        console.log('[Accept Suggested] Using asChildOf:', parentIntentId);
-      }
-      // If all are null, it means insert at root level (no options needed)
-
-      console.log('[Accept Suggested] Final insertionOptions:', insertionOptions);
-      console.log('[Accept Suggested] Available block IDs:', blocks.map(b => b.id));
-
-      const newBlock = addBlock(insertionOptions);
-      updateBlock(newBlock.id, suggestedIntent.content);
-      setSelectedBlockId(newBlock.id);
-      setEditingBlock(newBlock.id); // Start editing the new block
-      return;
-    }
-
-    // Fallback: add at root level if no insertPosition metadata
-    console.log('[Accept Suggested] No insertPosition, adding at root');
-    const newBlock = addBlock();
-    updateBlock(newBlock.id, suggestedIntent.content);
-    setSelectedBlockId(newBlock.id);
-    setEditingBlock(newBlock.id); // Start editing the new block
   };
 
   // Component for rendering a suggested intent block
@@ -453,16 +271,14 @@ export default function IntentPanel({
 
             <div className="flex flex-col gap-1 flex-shrink-0">
               <button
-                onClick={() => handleAcceptSuggested(suggestedIntent)}
+                onClick={() => suggestions.handleAcceptSuggested(suggestedIntent)}
                 className="px-2 py-0.5 text-[11px] bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
                 title="Add this to intent structure"
               >
                 Accept
               </button>
               <button
-                onClick={() => {
-                  // TODO: Implement reject/dismiss functionality
-                }}
+                onClick={() => suggestions.handleDismissSuggestion(suggestedIntent)}
                 className="px-2 py-0.5 text-[11px] bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 rounded transition-colors"
                 title="Dismiss suggestion"
               >
@@ -487,134 +303,8 @@ export default function IntentPanel({
     });
   };
 
-  // Build hierarchy: group blocks by parent
-  const rootBlocks = blocks.filter((b) => !b.parentId);
-  const blockMap = new Map<string, IntentBlock[]>();
-  blocks.forEach((block) => {
-    if (block.parentId) {
-      if (!blockMap.has(block.parentId)) {
-        blockMap.set(block.parentId, []);
-      }
-      blockMap.get(block.parentId)!.push(block);
-    }
-  });
-
-  // Build a merged rendering list that interleaves real blocks with suggested intents
-  // based on the intentTree structure
-  const buildMergedRenderList = useCallback(() => {
-    const renderList: Array<{ type: 'block' | 'suggested'; data: any }> = [];
-
-    // Get the first alignment result's intentTree (assuming single root analysis)
-    const firstAlignmentResult = alignmentResults ? Array.from(alignmentResults.values())[0] : null;
-    if (!firstAlignmentResult || !firstAlignmentResult.intentTree) {
-      // No alignment data, just render blocks normally
-      return rootBlocks.map(block => ({ type: 'block' as const, data: block }));
-    }
-
-    const intentTree = firstAlignmentResult.intentTree;
-    const blockById = new Map(blocks.map(b => [b.id, b]));
-    const renderedBlockIds = new Set<string>();
-
-    // Create a set of all existing block contents (normalized) to filter out accepted suggestions
-    const existingContents = new Set(
-      blocks.map(b => b.content.trim().toLowerCase())
-    );
-
-    // Recursively build render list from intentTree
-    const processNode = (node: any, depth: number = 0): void => {
-      if (node.isSuggested || node.status === 'extra') {
-        // Check if this suggestion has already been accepted (content exists in blocks)
-        const suggestedContent = node.content.trim().toLowerCase();
-        if (!existingContents.has(suggestedContent)) {
-          // This is a suggested intent that hasn't been accepted yet
-          renderList.push({
-            type: 'suggested',
-            data: { ...node, depth }
-          });
-        }
-      } else if (node.intentId) {
-        // This is an existing intent - find the corresponding block
-        const block = blockById.get(node.intentId);
-        if (block && !block.parentId) {
-          // Only process root blocks here (children handled by renderRootBlock)
-          renderList.push({
-            type: 'block',
-            data: block
-          });
-          renderedBlockIds.add(block.id);
-        }
-      }
-    };
-
-    // Process only root level nodes (children will be handled recursively by render functions)
-    intentTree.forEach((node: any) => processNode(node, 0));
-
-    // CRITICAL: Add any root blocks that weren't in the intentTree (e.g., newly added blocks)
-    rootBlocks.forEach(block => {
-      if (!renderedBlockIds.has(block.id)) {
-        renderList.push({
-          type: 'block',
-          data: block
-        });
-      }
-    });
-
-    return renderList;
-  }, [alignmentResults, blocks, rootBlocks]);
-
-  const mergedRenderList = buildMergedRenderList();
-
-  // Helper: Find an intent node in the intentTree by intentId
-  const findIntentNode = useCallback((intentId: string): any | null => {
-    if (!alignmentResults) return null;
-
-    const firstAlignmentResult = Array.from(alignmentResults.values())[0];
-    if (!firstAlignmentResult || !firstAlignmentResult.intentTree) return null;
-
-    const search = (nodes: any[]): any | null => {
-      for (const node of nodes) {
-        if (node.intentId === intentId) return node;
-        if (node.children && node.children.length > 0) {
-          const found = search(node.children);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-
-    return search(firstAlignmentResult.intentTree);
-  }, [alignmentResults]);
-
-  // Helper: Get children from intentTree (includes both real blocks and suggested)
-  const getIntentTreeChildren = useCallback((intentId: string): Array<{ type: 'block' | 'suggested'; data: any }> => {
-    const intentNode = findIntentNode(intentId);
-    if (!intentNode || !intentNode.children) return [];
-
-    const result: Array<{ type: 'block' | 'suggested'; data: any }> = [];
-    const blockById = new Map(blocks.map(b => [b.id, b]));
-
-    // Create a set of all existing block contents (normalized) to filter out accepted suggestions
-    const existingContents = new Set(
-      blocks.map(b => b.content.trim().toLowerCase())
-    );
-
-    intentNode.children.forEach((child: any) => {
-      if (child.isSuggested || child.status === 'extra') {
-        // Check if this suggestion has already been accepted (content exists in blocks)
-        const suggestedContent = child.content.trim().toLowerCase();
-        if (!existingContents.has(suggestedContent)) {
-          result.push({ type: 'suggested', data: child });
-        }
-      } else if (child.intentId) {
-        const block = blockById.get(child.intentId);
-        if (block) {
-          result.push({ type: 'block', data: block });
-        }
-      }
-    });
-
-    return result;
-  }, [findIntentNode, blocks]);
+  // Use hierarchy hook for structure data
+  const { rootBlocks, blockMap, mergedRenderList, getIntentTreeChildren } = hierarchy;
 
   const renderRootBlock = (block: IntentBlock): React.ReactElement => {
     const linkedWritingCount = block.linkedWritingIds?.length || 0;
@@ -622,8 +312,8 @@ export default function IntentPanel({
     // Get children from intentTree (includes both real blocks and suggested intents)
     const intentTreeChildren = getIntentTreeChildren(block.id);
 
-    // Get regular children from blockMap
-    const regularChildren = blockMap.get(block.id) || [];
+    // Get regular children from blockMap, sorted by position
+    const regularChildren = (blockMap.get(block.id) || []).sort((a, b) => a.position - b.position);
 
     // Merge: include all intentTreeChildren + any regularChildren not in intentTree
     const renderedChildIds = new Set(
@@ -643,10 +333,10 @@ export default function IntentPanel({
     const isEditing = editingBlock === block.id;
     const isEditingIntent = editingIntent === block.id;
     const isHovered = hoveredBlock === block.id;
-    const isDraggedOver = dragOverId === block.id;
+    const isDraggedOver = dragDrop.dragOverId === block.id;
 
     // Get coverage status for background color (matching writing panel colors)
-    const coverageStatus = getCoverageStatus(block.id);
+    const coverageStatus = coverage.getCoverageStatus(block.id);
     const coverageBgStyle = coverageStatus === 'covered'
       ? { backgroundColor: '#dcfce7' } // green - same as writing aligned
       : coverageStatus === 'partial'
@@ -667,9 +357,9 @@ export default function IntentPanel({
 
     // Determine drop indicator position
     let dropIndicator = null;
-    if (isDraggedOver && activeId && activeId !== block.id) {
+    if (isDraggedOver && dragDrop.activeId && dragDrop.activeId !== block.id) {
       const allBlocks = [...blocks].sort((a, b) => a.position - b.position);
-      const activeIndex = allBlocks.findIndex(b => b.id === activeId);
+      const activeIndex = allBlocks.findIndex(b => b.id === dragDrop.activeId);
       const overIndex = allBlocks.findIndex(b => b.id === block.id);
       const showTop = activeIndex > overIndex;
 
@@ -730,15 +420,15 @@ export default function IntentPanel({
               }
               onMouseEnter={(e) => {
                 // Clear any pending hide timeout
-                if (coverageTooltipTimeoutRef.current) {
-                  clearTimeout(coverageTooltipTimeoutRef.current);
-                  coverageTooltipTimeoutRef.current = null;
+                if (coverage.coverageTooltipTimeoutRef.current) {
+                  clearTimeout(coverage.coverageTooltipTimeoutRef.current);
+                  coverage.coverageTooltipTimeoutRef.current = null;
                 }
 
-                const details = getCoverageDetails(block.id);
+                const details = coverage.getCoverageDetails(block.id);
                 if (details) {
                   const rect = e.currentTarget.getBoundingClientRect();
-                  setCoverageTooltip({
+                  coverage.setCoverageTooltip({
                     x: rect.right + 10,
                     y: rect.top,
                     coverage: details
@@ -747,9 +437,9 @@ export default function IntentPanel({
               }}
               onMouseLeave={() => {
                 // Delay hiding tooltip to allow user to hover over it
-                coverageTooltipTimeoutRef.current = setTimeout(() => {
-                  if (!isHoveringCoverageTooltipRef.current) {
-                    setCoverageTooltip(null);
+                coverage.coverageTooltipTimeoutRef.current = setTimeout(() => {
+                  if (!coverage.isHoveringCoverageTooltipRef.current) {
+                    coverage.setCoverageTooltip(null);
                   }
                 }, 200);
               }}
@@ -974,17 +664,37 @@ export default function IntentPanel({
         )}
 
         {/* Render children - includes both real blocks and suggested intents */}
-        {!isCollapsed && childrenToRender.map((item, index) => {
-          if (item.type === 'suggested') {
-            return (
-              <div key={`suggested-${index}`} style={{ marginLeft: '20px' }} className="mt-1">
-                <SuggestedIntentBlock suggestedIntent={item.data} />
+        {!isCollapsed && (() => {
+          // Get only real block children for SortableContext
+          const realBlockChildren = childrenToRender
+            .filter(item => item.type === 'block')
+            .map(item => item.data);
+
+          return (
+            <SortableContext
+              items={realBlockChildren.map(b => b.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <div>
+                {childrenToRender.map((item, index) => {
+                  if (item.type === 'suggested') {
+                    return (
+                      <div key={`suggested-${index}`} style={{ marginLeft: '20px' }} className="mt-1">
+                        <SuggestedIntentBlock suggestedIntent={item.data} />
+                      </div>
+                    );
+                  } else {
+                    return (
+                      <SortableBlockItem key={item.data.id} id={item.data.id}>
+                        {renderChildBlock(item.data, 1)}
+                      </SortableBlockItem>
+                    );
+                  }
+                })}
               </div>
-            );
-          } else {
-            return renderChildBlock(item.data, 1);
-          }
-        })}
+            </SortableContext>
+          );
+        })()}
       </div>
     );
   };
@@ -993,8 +703,8 @@ export default function IntentPanel({
     // Get children from intentTree (includes both real blocks and suggested intents)
     const intentTreeChildren = getIntentTreeChildren(block.id);
 
-    // Get regular children from blockMap
-    const regularChildren = blockMap.get(block.id) || [];
+    // Get regular children from blockMap, sorted by position
+    const regularChildren = (blockMap.get(block.id) || []).sort((a, b) => a.position - b.position);
 
     // Merge: include all intentTreeChildren + any regularChildren not in intentTree
     const renderedChildIds = new Set(
@@ -1017,7 +727,7 @@ export default function IntentPanel({
     const isHovered = hoveredBlock === block.id;
 
     // Get coverage status for child blocks (matching writing panel colors)
-    const coverageStatus = getCoverageStatus(block.id);
+    const coverageStatus = coverage.getCoverageStatus(block.id);
     const coverageBgStyle = coverageStatus === 'covered'
       ? { backgroundColor: '#dcfce7' } // green - same as writing aligned
       : coverageStatus === 'partial'
@@ -1089,15 +799,15 @@ export default function IntentPanel({
               }
               onMouseEnter={(e) => {
                 // Clear any pending hide timeout
-                if (coverageTooltipTimeoutRef.current) {
-                  clearTimeout(coverageTooltipTimeoutRef.current);
-                  coverageTooltipTimeoutRef.current = null;
+                if (coverage.coverageTooltipTimeoutRef.current) {
+                  clearTimeout(coverage.coverageTooltipTimeoutRef.current);
+                  coverage.coverageTooltipTimeoutRef.current = null;
                 }
 
-                const details = getCoverageDetails(block.id);
+                const details = coverage.getCoverageDetails(block.id);
                 if (details) {
                   const rect = e.currentTarget.getBoundingClientRect();
-                  setCoverageTooltip({
+                  coverage.setCoverageTooltip({
                     x: rect.right + 10,
                     y: rect.top,
                     coverage: details
@@ -1106,9 +816,9 @@ export default function IntentPanel({
               }}
               onMouseLeave={() => {
                 // Delay hiding tooltip to allow user to hover over it
-                coverageTooltipTimeoutRef.current = setTimeout(() => {
-                  if (!isHoveringCoverageTooltipRef.current) {
-                    setCoverageTooltip(null);
+                coverage.coverageTooltipTimeoutRef.current = setTimeout(() => {
+                  if (!coverage.isHoveringCoverageTooltipRef.current) {
+                    coverage.setCoverageTooltip(null);
                   }
                 }, 200);
               }}
@@ -1298,17 +1008,37 @@ export default function IntentPanel({
         )}
 
         {/* Render children - includes both real blocks and suggested intents */}
-        {!isCollapsed && childrenToRender.map((item, index) => {
-          if (item.type === 'suggested') {
-            return (
-              <div key={`suggested-${index}`} style={{ marginLeft: `${(depth + 1) * 20}px` }} className="mt-1">
-                <SuggestedIntentBlock suggestedIntent={item.data} />
+        {!isCollapsed && (() => {
+          // Get only real block children for SortableContext
+          const realBlockChildren = childrenToRender
+            .filter(item => item.type === 'block')
+            .map(item => item.data);
+
+          return (
+            <SortableContext
+              items={realBlockChildren.map(b => b.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <div>
+                {childrenToRender.map((item, index) => {
+                  if (item.type === 'suggested') {
+                    return (
+                      <div key={`suggested-${index}`} style={{ marginLeft: `${(depth + 1) * 20}px` }} className="mt-1">
+                        <SuggestedIntentBlock suggestedIntent={item.data} />
+                      </div>
+                    );
+                  } else {
+                    return (
+                      <SortableBlockItem key={item.data.id} id={item.data.id}>
+                        {renderChildBlock(item.data, depth + 1)}
+                      </SortableBlockItem>
+                    );
+                  }
+                })}
               </div>
-            );
-          } else {
-            return renderChildBlock(item.data, depth + 1);
-          }
-        })}
+            </SortableContext>
+          );
+        })()}
       </div>
     );
   };
@@ -1316,11 +1046,11 @@ export default function IntentPanel({
   return (
     <>
       <DndContext
-        sensors={sensors}
+        sensors={dragDrop.sensors}
         collisionDetection={closestCenter}
-        onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
-        onDragEnd={handleDragEnd}
+        onDragStart={dragDrop.handleDragStart}
+        onDragOver={dragDrop.handleDragOver}
+        onDragEnd={dragDrop.handleDragEnd}
       >
         <div className="h-full flex flex-col overflow-hidden">
           <div className="flex-shrink-0 border-b">
@@ -1348,13 +1078,17 @@ export default function IntentPanel({
             </div>
           ) : (
             <SortableContext
-              items={blocks.map(b => b.id)}
+              items={rootBlocks.map(b => b.id)}
               strategy={verticalListSortingStrategy}
             >
               <div className="flex-1 overflow-y-auto p-4 min-h-0">
                 {mergedRenderList.map((item, index) => {
                   if (item.type === 'suggested') {
-                    return <SuggestedIntentBlock key={`suggested-${index}`} suggestedIntent={item.data} />;
+                    return (
+                      <div key={`suggested-root-${index}`} className="mb-2">
+                        <SuggestedIntentBlock suggestedIntent={item.data} />
+                      </div>
+                    );
                   } else {
                     return (
                       <SortableBlockItem key={item.data.id} id={item.data.id}>
@@ -1367,54 +1101,63 @@ export default function IntentPanel({
             </SortableContext>
           )}
         </div>
+
+        {/* Drag Overlay - shows the item being dragged */}
+        <DragOverlay>
+          {dragDrop.activeId ? (
+            <div className="bg-background border border-primary rounded-lg p-3 shadow-lg opacity-80">
+              {blocks.find(b => b.id === dragDrop.activeId)?.content || 'Dragging...'}
+            </div>
+          ) : null}
+        </DragOverlay>
       </DndContext>
 
       {/* Coverage Details Tooltip */}
-      {coverageTooltip && (
+      {coverage.coverageTooltip && (
         <div
           className="fixed z-50 max-w-sm p-3 rounded-lg shadow-lg border bg-white dark:bg-gray-800"
           style={{
-            left: `${coverageTooltip.x}px`,
-            top: `${coverageTooltip.y}px`,
-            borderColor: coverageTooltip.coverage.status === 'covered' ? '#86efac' :
-                        coverageTooltip.coverage.status === 'partial' ? '#fde047' :
-                        coverageTooltip.coverage.status === 'misaligned' ? '#fb923c' :
+            left: `${coverage.coverageTooltip.x}px`,
+            top: `${coverage.coverageTooltip.y}px`,
+            borderColor: coverage.coverageTooltip.coverage.status === 'covered' ? '#86efac' :
+                        coverage.coverageTooltip.coverage.status === 'partial' ? '#fde047' :
+                        coverage.coverageTooltip.coverage.status === 'misaligned' ? '#fb923c' :
                         '#fca5a5',
           }}
           onMouseEnter={() => {
             // User is hovering over tooltip, cancel any hide timeout
-            if (coverageTooltipTimeoutRef.current) {
-              clearTimeout(coverageTooltipTimeoutRef.current);
-              coverageTooltipTimeoutRef.current = null;
+            if (coverage.coverageTooltipTimeoutRef.current) {
+              clearTimeout(coverage.coverageTooltipTimeoutRef.current);
+              coverage.coverageTooltipTimeoutRef.current = null;
             }
-            isHoveringCoverageTooltipRef.current = true;
+            coverage.isHoveringCoverageTooltipRef.current = true;
           }}
           onMouseLeave={() => {
             // User left tooltip, hide it
-            isHoveringCoverageTooltipRef.current = false;
-            setCoverageTooltip(null);
+            coverage.isHoveringCoverageTooltipRef.current = false;
+            coverage.setCoverageTooltip(null);
           }}
         >
           <div className="flex items-start gap-2">
             <div className="flex-1">
               <div className="text-xs font-medium mb-1">
-                {coverageTooltip.coverage.status === 'covered' ? '✓ Covered' :
-                 coverageTooltip.coverage.status === 'partial' ? '◐ Partial' :
-                 coverageTooltip.coverage.status === 'misaligned' ? '⚠ Misaligned' :
-                 coverageTooltip.coverage.status === 'missing-not-started' ? '□ Not Started' :
+                {coverage.coverageTooltip.coverage.status === 'covered' ? '✓ Covered' :
+                 coverage.coverageTooltip.coverage.status === 'partial' ? '◐ Partial' :
+                 coverage.coverageTooltip.coverage.status === 'misaligned' ? '⚠ Misaligned' :
+                 coverage.coverageTooltip.coverage.status === 'missing-not-started' ? '□ Not Started' :
                  '⊘ Skipped'}
               </div>
 
               <div className="text-xs text-gray-700 dark:text-gray-300">
-                <p className="font-medium">{coverageTooltip.coverage.content}</p>
+                <p className="font-medium">{coverage.coverageTooltip.coverage.content}</p>
               </div>
 
               {/* Covered Aspects */}
-              {coverageTooltip.coverage.coveredAspects && coverageTooltip.coverage.coveredAspects.length > 0 && (
+              {coverage.coverageTooltip.coverage.coveredAspects && coverage.coverageTooltip.coverage.coveredAspects.length > 0 && (
                 <div className="mt-2">
                   <div className="text-[10px] font-medium text-green-700 dark:text-green-400">Covered:</div>
                   <ul className="text-[10px] text-gray-600 dark:text-gray-400 list-disc list-inside">
-                    {coverageTooltip.coverage.coveredAspects.map((aspect: string, idx: number) => (
+                    {coverage.coverageTooltip.coverage.coveredAspects.map((aspect: string, idx: number) => (
                       <li key={idx}>{aspect}</li>
                     ))}
                   </ul>
@@ -1422,11 +1165,11 @@ export default function IntentPanel({
               )}
 
               {/* Missing Aspects */}
-              {coverageTooltip.coverage.missingAspects && coverageTooltip.coverage.missingAspects.length > 0 && (
+              {coverage.coverageTooltip.coverage.missingAspects && coverage.coverageTooltip.coverage.missingAspects.length > 0 && (
                 <div className="mt-2">
                   <div className="text-[10px] font-medium text-red-700 dark:text-red-400">Missing:</div>
                   <ul className="text-[10px] text-gray-600 dark:text-gray-400 list-disc list-inside">
-                    {coverageTooltip.coverage.missingAspects.map((aspect: string, idx: number) => (
+                    {coverage.coverageTooltip.coverage.missingAspects.map((aspect: string, idx: number) => (
                       <li key={idx}>{aspect}</li>
                     ))}
                   </ul>
@@ -1434,10 +1177,10 @@ export default function IntentPanel({
               )}
 
               {/* Suggestion */}
-              {coverageTooltip.coverage.suggestion && (
+              {coverage.coverageTooltip.coverage.suggestion && (
                 <div className="mt-2 p-2 bg-blue-50 dark:bg-blue-950/30 rounded text-[10px] text-blue-800 dark:text-blue-200">
                   <span className="font-medium">💡 Suggestion: </span>
-                  {coverageTooltip.coverage.suggestion}
+                  {coverage.coverageTooltip.coverage.suggestion}
                 </div>
               )}
             </div>

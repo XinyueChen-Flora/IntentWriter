@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { RuleBlock, EditingTraceEntry } from "@/lib/partykit";
+import type { RuleBlock } from "@/lib/partykit";
 import type { User } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";

@@ -372,7 +372,7 @@ function IntentEditor({
   const [resetKey, setResetKey] = useState(0);
   const [isCheckingAlignment, setIsCheckingAlignment] = useState(false);
   const [lastCheckedContent, setLastCheckedContent] = useState("");
-  const [alignmentResult, setAlignmentResult] = useState<any>(null);
+  // ✗ REMOVED: Local alignmentResult state - use writingBlock.alignmentResult directly!
   const [showAlignment, setShowAlignment] = useState(false);
   const [previousContent, setPreviousContent] = useState("");
   const [paragraphCount, setParagraphCount] = useState(0);
@@ -382,9 +382,11 @@ function IntentEditor({
     y: number;
     annotation: any;
   } | null>(null);
-  const loadedAlignmentRef = useRef<string | null>(null);
   const tooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isHoveringTooltipRef = useRef(false);
+
+  // Use writingBlock.alignmentResult directly as the source of truth
+  const alignmentResult = writingBlock.alignmentResult;
 
   const doc = useMemo(() => new Y.Doc(), [resetKey]);
   const [isSynced, setIsSynced] = useState(false);
@@ -410,48 +412,41 @@ function IntentEditor({
     return result;
   }, []);
 
-  // Load alignment data from WritingBlock (synced from other users)
+  // Build text-to-intent map from alignment data
   useEffect(() => {
+    console.log('[Alignment] Building text-to-intent map:', {
+      intentId: intent.id,
+      intentContent: intent.content.substring(0, 50),
+      hasAlignmentResult: !!writingBlock.alignmentResult,
+      alignmentResultKeys: writingBlock.alignmentResult ? Object.keys(writingBlock.alignmentResult) : []
+    });
+
     if (writingBlock.alignmentResult) {
-      const resultJson = JSON.stringify(writingBlock.alignmentResult);
-      const isNewData = resultJson !== loadedAlignmentRef.current;
-
-      if (isNewData) {
-        console.log('[Alignment] Loading alignment data from WritingBlock');
-        loadedAlignmentRef.current = resultJson;
-        setAlignmentResult(writingBlock.alignmentResult);
-
-        // Build text-to-intent map from Intent Tree
-        const newMap = new Map<string, string>();
-        if (writingBlock.alignmentResult.intentTree) {
-          // Flatten tree to get all intents with their segments
-          const allIntents = flattenIntentTree(writingBlock.alignmentResult.intentTree);
-          allIntents.forEach((intent: any) => {
-            if (intent.intentId && intent.writingSegments) {
-              intent.writingSegments.forEach((segment: any) => {
-                const text = segment.text.trim();
-                newMap.set(text, intent.intentId);
-                // Also store first 100 chars for partial matches
-                if (text.length > 100) {
-                  newMap.set(text.substring(0, 100), intent.intentId);
-                }
-              });
-            }
-          });
-        }
-        setTextToIntentMap(newMap);
-
-        // Auto-enable showAlignment when alignment data is loaded (for all users)
-        console.log('[Alignment] Auto-enabling display for alignment data');
-        setShowAlignment(true);
-
-        // Notify parent
-        if (onAlignmentChange) {
-          onAlignmentChange(intent.id, writingBlock.alignmentResult);
-        }
+      // Build text-to-intent map from Intent Tree
+      const newMap = new Map<string, string>();
+      if (writingBlock.alignmentResult.intentTree) {
+        // Flatten tree to get all intents with their segments
+        const allIntents = flattenIntentTree(writingBlock.alignmentResult.intentTree);
+        allIntents.forEach((intent: any) => {
+          if (intent.intentId && intent.writingSegments) {
+            intent.writingSegments.forEach((segment: any) => {
+              const text = segment.text.trim();
+              newMap.set(text, intent.intentId);
+              // Also store first 100 chars for partial matches
+              if (text.length > 100) {
+                newMap.set(text.substring(0, 100), intent.intentId);
+              }
+            });
+          }
+        });
       }
+      setTextToIntentMap(newMap);
+
+      // Auto-enable showAlignment when alignment data is loaded (for all users)
+      console.log('[Alignment] Auto-enabling display for alignment data');
+      setShowAlignment(true);
     }
-  }, [writingBlock.alignmentResult, onAlignmentChange, intent.id, flattenIntentTree]);
+  }, [writingBlock.alignmentResult, intent.id, flattenIntentTree]);
 
   const provider = useMemo(
     () => {
@@ -974,31 +969,9 @@ function IntentEditor({
           intentCoverageCount: result.intentCoverage?.length
         });
 
-        // Store alignment result for rendering
-        setAlignmentResult(result);
-
-        // Build text-to-intent mapping for hover detection from Intent Tree
-        const newMap = new Map<string, string>();
-        if (result.intentTree) {
-          const allIntents = flattenIntentTree(result.intentTree);
-          allIntents.forEach((intent: any) => {
-            if (intent.intentId && intent.writingSegments) {
-              intent.writingSegments.forEach((segment: any) => {
-                const text = segment.text.trim();
-                newMap.set(text, intent.intentId);
-                // Also store first 100 chars for partial matches
-                if (text.length > 100) {
-                  newMap.set(text.substring(0, 100), intent.intentId);
-                }
-              });
-            }
-          });
-        }
-        setTextToIntentMap(newMap);
-
-        // Note: Styles will be applied/removed by the useEffect watching showAlignment
-
-        // Notify parent of alignment change with Intent Tree format
+        // ✓ Notify parent - this will update writingBlock.alignmentResult via PartyKit
+        // ✓ Then our useEffect will rebuild the text-to-intent map
+        // ✓ No need to setAlignmentResult or setTextToIntentMap here!
         if (onAlignmentChange) {
           onAlignmentChange(intent.id, {
             overallScore: result.overallScore,
@@ -1276,12 +1249,6 @@ function IntentEditor({
             onChange={(e) => {
               const isChecked = e.target.checked;
               setShowAlignment(isChecked);
-
-              // Auto-check if user enables alignment but no results exist yet
-              if (isChecked && !alignmentResult) {
-                console.log('[Alignment] Auto-checking on Show alignment enable');
-                handleManualCheck();
-              }
             }}
             className="w-3.5 h-3.5 cursor-pointer"
           />
@@ -1496,12 +1463,28 @@ export default function WritingEditor({
   const rootIntents = intentBlocks.filter((intent) => !intent.parentId);
 
   // Create a map of intentId -> writingBlock
+  // IMPORTANT: If there are duplicate blocks (same linkedIntentId), prioritize ones WITH alignmentResult
   const intentToWritingMap = new Map<string, WritingBlock>();
   writingBlocks.forEach((block) => {
     if (block.linkedIntentId) {
-      intentToWritingMap.set(block.linkedIntentId, block);
+      const existing = intentToWritingMap.get(block.linkedIntentId);
+      // Only update if: no existing block, OR this block has alignment data and existing doesn't
+      if (!existing || (block.alignmentResult && !existing.alignmentResult)) {
+        intentToWritingMap.set(block.linkedIntentId, block);
+      }
     }
   });
+
+  // Log if duplicates detected
+  const linkedIntentIds = writingBlocks.filter(b => b.linkedIntentId).map(b => b.linkedIntentId);
+  const uniqueIntentIds = new Set(linkedIntentIds);
+  if (linkedIntentIds.length !== uniqueIntentIds.size) {
+    console.warn('[WritingEditor] ⚠️ Duplicate writing blocks detected:', {
+      totalBlocks: linkedIntentIds.length,
+      uniqueIntents: uniqueIntentIds.size,
+      duplicates: linkedIntentIds.length - uniqueIntentIds.size
+    });
+  }
 
   // Helper function to get all child intents for a root intent
   const getChildIntents = (rootIntentId: string): IntentBlock[] => {

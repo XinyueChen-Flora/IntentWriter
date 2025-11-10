@@ -57,6 +57,37 @@ export default function CollaborativeEditor({
 
   // Load alignment results from WritingBlocks when they change
   useEffect(() => {
+    // Check for duplicates
+    const blockIds = writingBlocks.map(wb => wb.id);
+    const uniqueIds = new Set(blockIds);
+    const hasDuplicates = blockIds.length !== uniqueIds.size;
+
+    console.log('[CollaborativeEditor] WritingBlocks changed, loading alignment results:', {
+      totalBlocks: writingBlocks.length,
+      uniqueBlocks: uniqueIds.size,
+      hasDuplicates,
+      blocksWithAlignment: writingBlocks.filter(wb => wb.alignmentResult).length,
+      linkedIntentCounts: writingBlocks.reduce((acc, wb) => {
+        const key = wb.linkedIntentId || 'null';
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>),
+      blockDetails: writingBlocks.slice(0, 10).map(wb => ({ // Only first 10 to avoid spam
+        id: wb.id.substring(0, 20),
+        linkedIntentId: wb.linkedIntentId?.substring(0, 20),
+        hasAlignment: !!wb.alignmentResult,
+        alignmentKeys: wb.alignmentResult ? Object.keys(wb.alignmentResult) : []
+      }))
+    });
+
+    if (hasDuplicates) {
+      console.error('[CollaborativeEditor] ⚠️ DUPLICATE BLOCKS DETECTED!', {
+        totalBlocks: writingBlocks.length,
+        uniqueBlocks: uniqueIds.size,
+        duplicateCount: writingBlocks.length - uniqueIds.size
+      });
+    }
+
     const newResults = new Map<string, AlignmentResult>();
     writingBlocks.forEach(wb => {
       if (wb.linkedIntentId && wb.alignmentResult) {
@@ -64,6 +95,11 @@ export default function CollaborativeEditor({
       }
     });
     setAlignmentResults(newResults);
+
+    console.log('[CollaborativeEditor] Alignment results map updated:', {
+      mapSize: newResults.size,
+      intentIds: Array.from(newResults.keys()).map(id => id.substring(0, 20))
+    });
   }, [writingBlocks]);
 
   // Auto-restore from Supabase if PartyKit state is empty (dev mode restart)
@@ -567,15 +603,28 @@ export default function CollaborativeEditor({
   // Reorder blocks (for drag and drop)
   const reorderBlocks = useCallback(
     (draggedId: string, targetId: string, position: 'before' | 'after') => {
+      console.log('[CollaborativeEditor] reorderBlocks called:', { draggedId, targetId, position });
+
       const draggedBlock = intentBlocks.find((b) => b.id === draggedId);
       const targetBlock = intentBlocks.find((b) => b.id === targetId);
 
-      if (!draggedBlock || !targetBlock) return;
+      console.log('[CollaborativeEditor] Found blocks:', {
+        draggedBlock: draggedBlock ? { id: draggedBlock.id, content: draggedBlock.content, position: draggedBlock.position } : null,
+        targetBlock: targetBlock ? { id: targetBlock.id, content: targetBlock.content, position: targetBlock.position } : null
+      });
+
+      if (!draggedBlock || !targetBlock) {
+        console.log('[CollaborativeEditor] Missing blocks, returning');
+        return;
+      }
 
       // Don't allow dragging a parent into its own child
       let current = targetBlock;
       while (current.parentId) {
-        if (current.parentId === draggedId) return;
+        if (current.parentId === draggedId) {
+          console.log('[CollaborativeEditor] Cannot drag parent into child, returning');
+          return;
+        }
         current = intentBlocks.find((b) => b.id === current.parentId)!;
         if (!current) break;
       }
@@ -588,6 +637,14 @@ export default function CollaborativeEditor({
         newPosition = targetBlock.position + 0.5;
       }
 
+      console.log('[CollaborativeEditor] Updating position:', {
+        draggedId,
+        oldPosition: draggedBlock.position,
+        newPosition,
+        targetParentId: targetBlock.parentId,
+        targetLevel: targetBlock.level
+      });
+
       // Update the dragged block's position and parent
       updateIntentBlockRaw(draggedId, {
         position: newPosition,
@@ -596,21 +653,19 @@ export default function CollaborativeEditor({
         updatedAt: Date.now(),
       });
 
-      // Reorder all blocks to have sequential positions
-      setTimeout(() => {
-        const sortedBlocks = [...intentBlocks].sort((a, b) => a.position - b.position);
-        sortedBlocks.forEach((block, index) => {
-          if (block.position !== index) {
-            updateIntentBlockRaw(block.id, { position: index });
-          }
-        });
-      }, 100);
+      console.log('[CollaborativeEditor] Position update sent, should reflect immediately via optimistic update');
     },
     [intentBlocks, updateIntentBlockRaw]
   );
 
   // Handle alignment result changes
   const handleAlignmentChange = useCallback((intentId: string, result: AlignmentResult | null) => {
+    console.log('[Alignment Change] Called with:', {
+      intentId,
+      hasResult: !!result,
+      resultKeys: result ? Object.keys(result) : []
+    });
+
     setAlignmentResults((prev) => {
       const next = new Map(prev);
       if (result) {
@@ -623,10 +678,37 @@ export default function CollaborativeEditor({
 
     // Also save to WritingBlock so all users can see the alignment status
     const writingBlock = writingBlocks.find(wb => wb.linkedIntentId === intentId);
+    const intent = intentBlocks.find(ib => ib.id === intentId);
+
+    console.log('[Alignment Change] WritingBlock lookup:', {
+      intentId,
+      intentContent: intent?.content.substring(0, 50),
+      intentParentId: intent?.parentId,
+      isRootIntent: !intent?.parentId,
+      foundWritingBlock: !!writingBlock,
+      writingBlockId: writingBlock?.id,
+      hasUpdateFunction: !!updateWritingBlockRaw,
+      allWritingBlocks: writingBlocks.map(wb => ({
+        id: wb.id.substring(0, 20),
+        linkedIntentId: wb.linkedIntentId
+      }))
+    });
+
     if (writingBlock && updateWritingBlockRaw) {
+      console.log('[Alignment Change] ✓ Calling updateWritingBlockRaw:', {
+        writingBlockId: writingBlock.id,
+        hasResult: !!result,
+        functionType: typeof updateWritingBlockRaw
+      });
       updateWritingBlockRaw(writingBlock.id, { alignmentResult: result });
+      console.log('[Alignment Change] ✓ updateWritingBlockRaw call completed');
+    } else {
+      console.log('[Alignment Change] ✗ Cannot save - missing writingBlock or updateFunction:', {
+        hasWritingBlock: !!writingBlock,
+        hasUpdateFunction: !!updateWritingBlockRaw
+      });
     }
-  }, [writingBlocks, updateWritingBlockRaw]);
+  }, [writingBlocks, intentBlocks, updateWritingBlockRaw]);
 
   // Handle hover on intent or sentence
   const handleHoverIntent = useCallback((intentId: string | null) => {
