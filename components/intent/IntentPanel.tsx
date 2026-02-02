@@ -1,10 +1,10 @@
 "use client";
 
-import type { IntentBlock, WritingBlock } from "@/lib/partykit";
+import type { IntentBlock, WritingBlock, ImpactPreview, HelpRequest, SectionPreview } from "@/lib/partykit";
 import type { User } from "@supabase/supabase-js";
 import type { AlignmentResult } from "../editor/WritingEditor";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronRight, Trash2, Lightbulb, UserPlus, X, ChevronLeft, Plus, GripVertical } from "lucide-react";
+import { ChevronDown, ChevronRight, Trash2, Lightbulb, UserPlus, X, ChevronLeft, Plus, GripVertical, Plus as PlusIcon, Minus, Edit2, HelpCircle } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import ImportMarkdownDialog from "../editor/ImportMarkdownDialog";
 import ReactMarkdown from "react-markdown";
@@ -27,6 +27,8 @@ import { useIntentDragDrop } from './hooks/useIntentDragDrop';
 import { useIntentCoverage } from './hooks/useIntentCoverage';
 import { useIntentSuggestions } from './hooks/useIntentSuggestions';
 import { useIntentHierarchy } from './hooks/useIntentHierarchy';
+import TeamDiscussionDialog, { type ParticipationType } from '../discussion/TeamDiscussionDialog';
+import ActiveDiscussions from '../discussion/ActiveDiscussions';
 
 type IntentPanelProps = {
   blocks: readonly IntentBlock[];
@@ -50,6 +52,26 @@ type IntentPanelProps = {
   hoveredIntentId?: string | null;
   onHoverIntent?: (intentId: string | null) => void;
   activeIntentId?: string | null; // Currently editing intent
+  // Preview mode props
+  activePreview?: ImpactPreview | null;
+  activeHelpRequest?: HelpRequest | null;
+  previewSelectedOption?: "A" | "B" | null;
+  onPreviewOptionChange?: (option: "A" | "B") => void;
+  onClearPreview?: () => void;
+  onApplyPreview?: (option: "A" | "B") => void;
+  onStartTeamDiscussion?: (discussion: {
+    participationType: ParticipationType;
+    myThoughts: string;
+    selectedOption: "A" | "B" | null;
+    requiredResponders: string[];
+    optionalResponders: string[];
+  }) => void;
+  // Team discussion handlers
+  helpRequests?: readonly HelpRequest[];
+  onRespondToDiscussion?: (requestId: string, response: { vote?: "A" | "B"; comment?: string }) => void;
+  onResolveDiscussion?: (requestId: string, option: "A" | "B") => void;
+  onCancelDiscussion?: (requestId: string) => void;
+  onViewDiscussionPreview?: (helpRequest: HelpRequest) => void;
 };
 
 // Sortable Block Item Wrapper
@@ -158,12 +180,183 @@ export default function IntentPanel({
   hoveredIntentId,
   onHoverIntent,
   activeIntentId,
+  activePreview,
+  activeHelpRequest,
+  previewSelectedOption,
+  onPreviewOptionChange,
+  onClearPreview,
+  onApplyPreview,
+  onStartTeamDiscussion,
+  helpRequests,
+  onRespondToDiscussion,
+  onResolveDiscussion,
+  onCancelDiscussion,
+  onViewDiscussionPreview,
 }: IntentPanelProps) {
   // Local UI state
   const [collapsedBlocks, setCollapsedBlocks] = useState<Set<string>>(new Set());
   const [editingBlock, setEditingBlock] = useState<string | null>(null);
   const [editingIntent, setEditingIntent] = useState<string | null>(null);
   const [hoveredBlock, setHoveredBlock] = useState<string | null>(null);
+  const [showTeamDiscussionDialog, setShowTeamDiscussionDialog] = useState(false);
+
+
+  // Get all affected intents - from both intentChanges AND affectedIntentIds/affectedRootIntentIds
+  const getAffectedIntents = () => {
+    if (!activePreview) return [];
+
+    const affectedIds = new Set<string>();
+
+    // Collect from intentChanges
+    activePreview.optionA.intentChanges?.forEach(c => {
+      if (c.changeType !== "unchanged") affectedIds.add(c.intentId);
+    });
+    activePreview.optionB.intentChanges?.forEach(c => {
+      if (c.changeType !== "unchanged") affectedIds.add(c.intentId);
+    });
+
+    // Also include from affectedIntentIds and affectedRootIntentIds
+    activePreview.affectedIntentIds?.forEach(id => affectedIds.add(id));
+    activePreview.affectedRootIntentIds?.forEach(id => affectedIds.add(id));
+
+    return Array.from(affectedIds);
+  };
+
+  // Get change for a specific intent and option
+  const getChangeForOption = (intentId: string, option: "A" | "B"): SectionPreview | null => {
+    if (!activePreview) return null;
+    const changes = option === "A"
+      ? activePreview.optionA.intentChanges
+      : activePreview.optionB.intentChanges;
+    return changes?.find(c => c.intentId === intentId) || null;
+  };
+
+  // Check if this intent is affected by the preview
+  const isIntentAffected = (intentId: string): boolean => {
+    if (!activePreview) return false;
+
+    // Check in intentChanges
+    const hasChangeA = activePreview.optionA.intentChanges?.some(c => c.intentId === intentId);
+    const hasChangeB = activePreview.optionB.intentChanges?.some(c => c.intentId === intentId);
+
+    // Check in affectedIntentIds and affectedRootIntentIds
+    const inAffectedIds = activePreview.affectedIntentIds?.includes(intentId);
+    const inAffectedRootIds = activePreview.affectedRootIntentIds?.includes(intentId);
+
+    return hasChangeA || hasChangeB || inAffectedIds || inAffectedRootIds || false;
+  };
+
+  // Inline diff component shown directly on affected intent blocks
+  const InlineIntentDiff = ({ block }: { block: IntentBlock }) => {
+    const changeB = getChangeForOption(block.id, "B");
+
+    const labelA = activePreview?.optionA.label || "Keep Current";
+    const labelB = activePreview?.optionB.label || "Make Change";
+
+    // Check if this intent is affected
+    const isAffectedSection = activePreview?.affectedRootIntentIds?.includes(block.id);
+    const isAffectedIntent = activePreview?.affectedIntentIds?.includes(block.id);
+
+    // If not affected at all, don't show
+    if (!changeB && !isAffectedSection && !isAffectedIntent) return null;
+
+    // Determine the change type
+    const changeType = changeB?.changeType || "unchanged";
+    const currentText = block.content;
+    const newText = changeB?.previewText || "";
+
+    // Get badge and style based on change type
+    const getBadgeForChangeType = (type: string) => {
+      switch (type) {
+        case "modified":
+          return { text: "MODIFIED", bg: "bg-yellow-100", color: "text-yellow-700" };
+        case "added":
+          return { text: "NEW", bg: "bg-green-100", color: "text-green-700" };
+        case "removed":
+          return { text: "REMOVED", bg: "bg-red-100", color: "text-red-700" };
+        default:
+          return { text: "NO CHANGE", bg: "bg-gray-100", color: "text-gray-600" };
+      }
+    };
+
+    const badgeB = getBadgeForChangeType(changeType);
+
+    return (
+      <div className="mt-2 border-t border-orange-200 pt-2">
+        <div className="text-[10px] text-orange-600 font-medium mb-1.5 flex items-center gap-1">
+          <HelpCircle className="h-3 w-3" />
+          How would this intent change?
+        </div>
+
+        {/* Side-by-side options */}
+        <div className="grid grid-cols-2 gap-2">
+          {/* Option A - Keep Current */}
+          <button
+            onClick={() => onPreviewOptionChange?.("A")}
+            className={`text-left p-2 rounded-md border transition-all ${
+              previewSelectedOption === "A"
+                ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20 ring-1 ring-blue-500"
+                : "border-gray-200 hover:border-blue-300 hover:bg-blue-50/50"
+            }`}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className={`text-[10px] font-semibold ${
+                previewSelectedOption === "A" ? "text-blue-700" : "text-gray-600"
+              }`}>
+                {labelA}
+              </span>
+              <span className="text-[8px] px-1 py-0.5 bg-gray-100 text-gray-600 rounded">
+                KEEP
+              </span>
+            </div>
+            <div className="text-xs text-gray-600">
+              {currentText || "(No content)"}
+            </div>
+          </button>
+
+          {/* Option B - Make Change */}
+          <button
+            onClick={() => onPreviewOptionChange?.("B")}
+            className={`text-left p-2 rounded-md border transition-all ${
+              previewSelectedOption === "B"
+                ? "border-purple-500 bg-purple-50 dark:bg-purple-900/20 ring-1 ring-purple-500"
+                : changeType === "removed"
+                ? "border-red-200 hover:border-red-300 hover:bg-red-50/50"
+                : changeType === "added"
+                ? "border-green-200 hover:border-green-300 hover:bg-green-50/50"
+                : "border-gray-200 hover:border-purple-300 hover:bg-purple-50/50"
+            }`}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className={`text-[10px] font-semibold ${
+                previewSelectedOption === "B" ? "text-purple-700" : "text-gray-600"
+              }`}>
+                {labelB}
+              </span>
+              <span className={`text-[8px] px-1 py-0.5 rounded ${badgeB.bg} ${badgeB.color}`}>
+                {badgeB.text}
+              </span>
+            </div>
+            <div className={`text-xs ${
+              changeType === "removed"
+                ? "text-red-600 line-through"
+                : changeType === "added"
+                ? "text-green-700 font-medium"
+                : changeType === "modified"
+                ? "text-purple-800 font-medium"
+                : "text-gray-500"
+            }`}>
+              {changeType === "removed"
+                ? currentText
+                : changeType === "added" || changeType === "modified"
+                ? newText
+                : currentText || "(No change)"}
+            </div>
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   // Use custom hooks
   const dragDrop = useIntentDragDrop({ blocks, reorderBlocks });
@@ -351,6 +544,10 @@ export default function IntentPanel({
     const isActivelyEditing = activeIntentId === block.id;
     const activeEditingStyle = isActivelyEditing ? 'ring-2 ring-blue-500 shadow-lg bg-blue-50 dark:bg-blue-950/20' : '';
 
+    // Check if this block is affected by active preview
+    const isAffectedByPreview = isIntentAffected(block.id);
+    const previewAffectedStyle = isAffectedByPreview ? 'ring-2 ring-orange-400 shadow-md bg-orange-50 dark:bg-orange-950/20' : '';
+
     // Determine drop indicator position
     let dropIndicator = null;
     if (isDraggedOver && dragDrop.activeId && dragDrop.activeId !== block.id) {
@@ -383,10 +580,10 @@ export default function IntentPanel({
       >
         {dropIndicator}
         <div
-          className={`border rounded-lg p-3 transition-all ${activeEditingStyle || hoverRing} ${
+          className={`border rounded-lg p-3 transition-all ${previewAffectedStyle || activeEditingStyle || hoverRing} ${
             selectedBlockId === block.id ? "border-primary bg-primary/5" : "border-border"
           }`}
-          style={selectedBlockId === block.id ? {} : coverageBgStyle}
+          style={selectedBlockId === block.id || isAffectedByPreview ? {} : coverageBgStyle}
         >
           {/* Header Row: Chevron + Content + Assignee + Delete */}
           <div className="flex items-start gap-2">
@@ -627,6 +824,9 @@ export default function IntentPanel({
               <div>{linkedWritingCount} writing block{linkedWritingCount > 1 ? 's' : ''} linked</div>
             )}
           </div>
+
+          {/* Inline diff preview - shown directly on affected intent blocks */}
+          {isAffectedByPreview && <InlineIntentDiff block={block} />}
         </div>
 
         {/* Insert below button - shown on hover */}
@@ -742,6 +942,10 @@ export default function IntentPanel({
     const isActivelyEditing = activeIntentId === block.id;
     const activeEditingStyle = isActivelyEditing ? 'ring-2 ring-blue-500 shadow-md bg-blue-50 dark:bg-blue-950/20' : '';
 
+    // Check if this block is affected by active preview
+    const isAffectedByPreview = isIntentAffected(block.id);
+    const previewAffectedStyle = isAffectedByPreview ? 'ring-2 ring-orange-400 shadow-md bg-orange-50 dark:bg-orange-950/20' : '';
+
     return (
       <div
         key={block.id}
@@ -761,12 +965,14 @@ export default function IntentPanel({
         }}
       >
         <div
-          className={`border-l-2 pl-2 py-1 rounded-r transition-all ${activeEditingStyle || hoverRing} ${
+          className={`border-l-2 pl-2 py-1 rounded-r transition-all ${previewAffectedStyle || activeEditingStyle || hoverRing} ${
             selectedBlockId === block.id
               ? "bg-primary/5 border-primary"
+              : isAffectedByPreview
+              ? "border-orange-400"
               : "border-secondary"
           }`}
-          style={selectedBlockId === block.id ? {} : coverageBgStyle}
+          style={selectedBlockId === block.id || isAffectedByPreview ? {} : coverageBgStyle}
         >
           <div className="flex items-start gap-2">
             {hasChildren && (
@@ -935,6 +1141,9 @@ export default function IntentPanel({
                   {linkedWritingCount} linked
                 </div>
               )}
+
+              {/* Inline diff preview - shown directly on affected intent blocks */}
+              {isAffectedByPreview && <InlineIntentDiff block={block} />}
             </div>
 
             {isHovered && block.level > 0 && (
@@ -1065,6 +1274,98 @@ export default function IntentPanel({
             </div>
           </div>
 
+          {/* Active Discussions */}
+          {helpRequests && helpRequests.length > 0 && (
+            <ActiveDiscussions
+              helpRequests={[...helpRequests]}
+              intentBlocks={[...blocks]}
+              currentUserId={currentUser.id}
+              currentUserName={currentUser.user_metadata?.name || currentUser.email?.split('@')[0]}
+              currentUserEmail={currentUser.email || undefined}
+              onRespond={(requestId, response) => onRespondToDiscussion?.(requestId, response)}
+              onResolve={(requestId, option) => onResolveDiscussion?.(requestId, option)}
+              onCancel={(requestId) => onCancelDiscussion?.(requestId)}
+              onViewPreview={(helpRequest) => onViewDiscussionPreview?.(helpRequest)}
+            />
+          )}
+
+          {/* Preview Mode Header - shows question, team discussion status, and actions */}
+          {activePreview && (
+            <div className={`flex-shrink-0 px-4 py-2 border-b ${
+              activePreview.needsTeamDiscussion
+                ? "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"
+                : "bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800"
+            }`}>
+              <div className="flex items-center justify-between mb-1">
+                <div className={`text-xs ${activePreview.needsTeamDiscussion ? "text-red-800 dark:text-red-200" : "text-orange-800 dark:text-orange-200"}`}>
+                  <span className="font-medium">Question:</span> {activeHelpRequest?.question || "How would this change affect intents?"}
+                </div>
+                {onClearPreview && (
+                  <button onClick={onClearPreview} className={activePreview.needsTeamDiscussion ? "text-red-600 hover:text-red-800" : "text-orange-600 hover:text-orange-800"}>
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* Team discussion recommendation */}
+              {activePreview.needsTeamDiscussion && (
+                <div className="mb-2 px-2 py-1 bg-red-100 dark:bg-red-900/30 rounded text-[10px] text-red-700 dark:text-red-300">
+                  <span className="font-semibold">⚠ Team Discussion Recommended:</span> This change would affect {activePreview.affectedRootIntentIds?.length || 0} sections
+                </div>
+              )}
+
+              {/* Selection status and apply button */}
+              <div className="flex items-center justify-between">
+                <div className={`text-[11px] ${activePreview.needsTeamDiscussion ? "text-red-700" : "text-orange-700"}`}>
+                  {previewSelectedOption ? (
+                    <span>
+                      Selected: <span className={`font-semibold ${
+                        previewSelectedOption === "A" ? "text-blue-600" : "text-purple-600"
+                      }`}>
+                        {previewSelectedOption === "A" ? activePreview.optionA.label : activePreview.optionB.label}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="italic">Click an option on affected intents below</span>
+                  )}
+                </div>
+                {previewSelectedOption && (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => onPreviewOptionChange?.(null as any)}
+                      className="px-2 py-0.5 text-[10px] bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
+                    >
+                      Reset
+                    </button>
+                    {activePreview.needsTeamDiscussion ? (
+                      <button
+                        onClick={() => setShowTeamDiscussionDialog(true)}
+                        className="px-2 py-0.5 text-[10px] bg-red-600 hover:bg-red-700 text-white rounded"
+                      >
+                        Ask Team
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          if (previewSelectedOption) {
+                            onApplyPreview?.(previewSelectedOption);
+                          }
+                        }}
+                        className={`px-2 py-0.5 text-[10px] text-white rounded ${
+                          previewSelectedOption === "A"
+                            ? "bg-blue-600 hover:bg-blue-700"
+                            : "bg-purple-600 hover:bg-purple-700"
+                        }`}
+                      >
+                        Apply This Version
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {blocks.length === 0 ? (
             <div className="flex-1 flex items-center justify-center text-center text-muted-foreground">
               <div>
@@ -1183,6 +1484,26 @@ export default function IntentPanel({
           </div>
         </div>
       )}
+
+      {/* Team Discussion Dialog */}
+      {showTeamDiscussionDialog && activePreview && activeHelpRequest && (
+        <TeamDiscussionDialog
+          helpRequest={activeHelpRequest}
+          preview={activePreview}
+          intentBlocks={[...blocks]}
+          selectedOption={previewSelectedOption ?? null}
+          currentUserId={currentUser.id}
+          currentUserName={currentUser.user_metadata?.name || currentUser.email?.split('@')[0]}
+          onClose={() => setShowTeamDiscussionDialog(false)}
+          onSubmit={(discussion) => {
+            if (onStartTeamDiscussion) {
+              onStartTeamDiscussion(discussion);
+            }
+            setShowTeamDiscussionDialog(false);
+          }}
+        />
+      )}
+
     </>
   );
 }

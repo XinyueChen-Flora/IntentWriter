@@ -9,6 +9,7 @@ import SharedRulesPanel from "../intent/SharedRulesPanel";
 import { useState, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { parseMarkdownToIntentsAdvanced } from "@/lib/markdownParser";
+import type { ImpactPreview, HelpRequest } from "@/lib/partykit";
 
 type CollaborativeEditorProps = {
   roomId: string;
@@ -39,6 +40,11 @@ export default function CollaborativeEditor({
   // Map<intentId, AlignmentResult with FULL intentTree including suggestions>
   const [localSuggestedIntents, setLocalSuggestedIntents] = useState<Map<string, AlignmentResult>>(new Map());
 
+  // Preview state - for impact preview visualization
+  const [activePreview, setActivePreview] = useState<ImpactPreview | null>(null);
+  const [activeHelpRequest, setActiveHelpRequest] = useState<HelpRequest | null>(null);
+  const [previewSelectedOption, setPreviewSelectedOption] = useState<"A" | "B" | null>(null);
+
   const {
     state,
     isConnected,
@@ -53,6 +59,7 @@ export default function CollaborativeEditor({
     updateRuleBlock,
     deleteRuleBlock,
     addHelpRequest,
+    updateHelpRequest,
   } = useRoom(roomId, user);
 
   const writingBlocks = state.writingBlocks;
@@ -555,6 +562,222 @@ export default function CollaborativeEditor({
     setHoveredIntentId(intentId);
   }, []);
 
+  // Handle preview activation from WritingEditor
+  const handlePreviewActive = useCallback((preview: ImpactPreview | null, helpRequest: HelpRequest | null) => {
+    setActivePreview(preview);
+    setActiveHelpRequest(helpRequest);
+    setPreviewSelectedOption(null);
+  }, []);
+
+  // Handle preview option selection
+  const handlePreviewOptionSelect = useCallback((option: "A" | "B") => {
+    setPreviewSelectedOption(option);
+    // Update the help request with selected option
+    if (activeHelpRequest) {
+      updateHelpRequest(activeHelpRequest.id, { selectedOption: option });
+    }
+  }, [activeHelpRequest, updateHelpRequest]);
+
+  // Handle "Ask Team" - share help request with team
+  const handleAskTeam = useCallback(() => {
+    if (activeHelpRequest) {
+      updateHelpRequest(activeHelpRequest.id, { status: 'team' });
+    }
+  }, [activeHelpRequest, updateHelpRequest]);
+
+  // Handle preview option change (A/B toggle)
+  const handlePreviewOptionChange = useCallback((option: "A" | "B") => {
+    setPreviewSelectedOption(option);
+    if (activeHelpRequest) {
+      updateHelpRequest(activeHelpRequest.id, { selectedOption: option });
+    }
+  }, [activeHelpRequest, updateHelpRequest]);
+
+  // Clear preview
+  const handleClearPreview = useCallback(() => {
+    setActivePreview(null);
+    setActiveHelpRequest(null);
+    setPreviewSelectedOption(null);
+  }, []);
+
+  // Apply the selected preview option - update intent blocks with the changes
+  const handleApplyPreview = useCallback((option: "A" | "B") => {
+    if (!activePreview) return;
+
+    const changes = option === "A"
+      ? activePreview.optionA.intentChanges
+      : activePreview.optionB.intentChanges;
+
+    // Apply each change to the corresponding intent block
+    changes?.forEach(change => {
+      if (change.changeType === "modified" && change.previewText) {
+        // Find the intent block and update its content
+        const intentBlock = intentBlocks.find(b => b.id === change.intentId);
+        if (intentBlock) {
+          updateIntentBlockRaw(change.intentId, {
+            content: change.previewText,
+            updatedAt: Date.now(),
+          });
+        }
+      }
+      // TODO: Handle "added" and "removed" change types if needed
+    });
+
+    // Mark the help request as resolved
+    if (activeHelpRequest) {
+      updateHelpRequest(activeHelpRequest.id, {
+        status: 'resolved',
+        selectedOption: option,
+      });
+    }
+
+    // Clear the preview
+    handleClearPreview();
+  }, [activePreview, activeHelpRequest, intentBlocks, updateIntentBlockRaw, updateHelpRequest, handleClearPreview]);
+
+  // Handle starting a team discussion
+  const handleStartTeamDiscussion = useCallback((discussion: {
+    participationType: "vote" | "feedback" | "execute" | "tentative";
+    myThoughts: string;
+    selectedOption: "A" | "B" | null;
+    requiredResponders: string[];
+    optionalResponders: string[];
+  }) => {
+    if (!activeHelpRequest || !activePreview) return;
+
+    // Update the help request with team discussion data
+    updateHelpRequest(activeHelpRequest.id, {
+      status: 'team',
+      selectedOption: discussion.selectedOption || undefined,
+      impactPreview: activePreview,
+      teamDiscussion: {
+        participationType: discussion.participationType,
+        initiatorThoughts: discussion.myThoughts,
+        selectedOption: discussion.selectedOption,
+        requiredResponders: discussion.requiredResponders,
+        optionalResponders: discussion.optionalResponders,
+        responses: [],
+      },
+    });
+
+    // Clear the local preview state (the discussion is now stored in the HelpRequest)
+    handleClearPreview();
+
+    console.log("[Team Discussion] Started:", {
+      helpRequestId: activeHelpRequest.id,
+      participationType: discussion.participationType,
+      requiredResponders: discussion.requiredResponders,
+    });
+  }, [activeHelpRequest, activePreview, updateHelpRequest, handleClearPreview]);
+
+  // Handle responding to a team discussion
+  const handleRespondToDiscussion = useCallback((requestId: string, response: {
+    vote?: "A" | "B";
+    comment?: string;
+  }) => {
+    const helpRequest = state.helpRequests.find(hr => hr.id === requestId);
+    if (!helpRequest || !helpRequest.teamDiscussion) return;
+
+    const newResponse = {
+      userId: user.id,
+      userName: user.user_metadata?.name || user.email?.split('@')[0],
+      userEmail: user.email,
+      vote: response.vote,
+      comment: response.comment,
+      respondedAt: Date.now(),
+    };
+
+    const updatedResponses = [
+      ...(helpRequest.teamDiscussion.responses || []),
+      newResponse,
+    ];
+
+    updateHelpRequest(requestId, {
+      teamDiscussion: {
+        ...helpRequest.teamDiscussion,
+        responses: updatedResponses,
+      },
+    });
+
+    console.log("[Team Discussion] Response submitted:", {
+      helpRequestId: requestId,
+      response: newResponse,
+    });
+  }, [state.helpRequests, user, updateHelpRequest]);
+
+  // Handle resolving a team discussion (initiator only)
+  const handleResolveDiscussion = useCallback((requestId: string, option: "A" | "B") => {
+    const helpRequest = state.helpRequests.find(hr => hr.id === requestId);
+    if (!helpRequest || !helpRequest.teamDiscussion) return;
+    if (helpRequest.createdBy !== user.id) return; // Only initiator can resolve
+
+    // Apply the intent changes if there are any
+    const preview = helpRequest.impactPreview;
+    if (preview) {
+      const changes = option === "A"
+        ? preview.optionA.intentChanges
+        : preview.optionB.intentChanges;
+
+      changes?.forEach(change => {
+        if (change.changeType === "modified" && change.previewText) {
+          const intentBlock = intentBlocks.find(b => b.id === change.intentId);
+          if (intentBlock) {
+            updateIntentBlockRaw(change.intentId, {
+              content: change.previewText,
+              updatedAt: Date.now(),
+            });
+          }
+        }
+      });
+    }
+
+    // Update the help request as resolved
+    updateHelpRequest(requestId, {
+      status: 'resolved',
+      selectedOption: option,
+      teamDiscussion: {
+        ...helpRequest.teamDiscussion,
+        resolvedAt: Date.now(),
+        resolvedOption: option,
+      },
+    });
+
+    console.log("[Team Discussion] Resolved:", {
+      helpRequestId: requestId,
+      resolvedOption: option,
+    });
+  }, [state.helpRequests, user.id, intentBlocks, updateIntentBlockRaw, updateHelpRequest]);
+
+  // Handle canceling a team discussion (initiator only)
+  const handleCancelDiscussion = useCallback((requestId: string) => {
+    const helpRequest = state.helpRequests.find(hr => hr.id === requestId);
+    if (!helpRequest) return;
+    if (helpRequest.createdBy !== user.id) return; // Only initiator can cancel
+
+    // Reset back to previewing state (or delete the request)
+    updateHelpRequest(requestId, {
+      status: 'resolved', // Mark as resolved but without applying
+      teamDiscussion: undefined, // Clear team discussion data
+    });
+
+    console.log("[Team Discussion] Canceled:", { helpRequestId: requestId });
+  }, [state.helpRequests, user.id, updateHelpRequest]);
+
+  // Handle viewing a discussion's preview (opens it in Intent/Writing panels)
+  const handleViewDiscussionPreview = useCallback((helpRequest: HelpRequest) => {
+    if (!helpRequest.impactPreview) return;
+
+    // Set the active preview and help request to show in Intent/Writing panels
+    setActivePreview(helpRequest.impactPreview);
+    setActiveHelpRequest(helpRequest);
+    setPreviewSelectedOption(helpRequest.selectedOption || null);
+
+    console.log("[Team Discussion] Viewing preview:", {
+      helpRequestId: helpRequest.id,
+      question: helpRequest.question,
+    });
+  }, []);
+
   // Handle panel resize
   const handleMouseDown = useCallback(() => {
     setIsResizing(true);
@@ -765,6 +988,10 @@ export default function CollaborativeEditor({
             onRegisterYjsExporter={handleRegisterYjsExporter}
             onActiveWritingBlockChange={setActiveIntentId}
             addHelpRequest={addHelpRequest}
+            onPreviewActive={handlePreviewActive}
+            activePreview={activePreview}
+            activeHelpRequest={activeHelpRequest}
+            previewSelectedOption={previewSelectedOption}
           />
         </div>
 
@@ -804,6 +1031,18 @@ export default function CollaborativeEditor({
               hoveredIntentId={hoveredIntentId}
               onHoverIntent={handleHoverIntent}
               activeIntentId={activeIntentId}
+              activePreview={activePreview}
+              activeHelpRequest={activeHelpRequest}
+              previewSelectedOption={previewSelectedOption}
+              onPreviewOptionChange={handlePreviewOptionChange}
+              onClearPreview={handleClearPreview}
+              onApplyPreview={handleApplyPreview}
+              onStartTeamDiscussion={handleStartTeamDiscussion}
+              helpRequests={state.helpRequests}
+              onRespondToDiscussion={handleRespondToDiscussion}
+              onResolveDiscussion={handleResolveDiscussion}
+              onCancelDiscussion={handleCancelDiscussion}
+              onViewDiscussionPreview={handleViewDiscussionPreview}
             />
           </div>
 

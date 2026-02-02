@@ -3,8 +3,8 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { X, HelpCircle, Loader2, MessageSquare, Bot, Send, CheckCircle, AlertTriangle, ArrowRight, GitCompare, Users } from "lucide-react";
-import type { HelpRequest, IntentBlock } from "@/lib/partykit";
+import { X, HelpCircle, Loader2, MessageSquare, Bot, Send, CheckCircle } from "lucide-react";
+import type { HelpRequest, IntentBlock, ImpactPreview, WritingBlock } from "@/lib/partykit";
 
 // Question stems - common uncertainty patterns
 const QUESTION_STEMS = [
@@ -57,93 +57,51 @@ type ChatMessage = {
   content: string;
 };
 
-type PanelPhase = "question" | "judging" | "personal-chat" | "team-escalation";
-
-type SectionPreview = {
-  intentId: string;
-  intentContent: string;
-  currentText?: string;
-  previewText: string;
-  changeType: "modified" | "unchanged" | "new" | "removed";
-};
-
-type ImpactPreview = {
-  type: string;
-  originalText: string;
-  optionA?: {
-    label: string;
-    yourSection: string;
-    affectedSections: SectionPreview[];
-  };
-  optionB?: {
-    label: string;
-    yourSection: string;
-    affectedSections: SectionPreview[];
-  };
-  // For add-remove
-  withContent?: {
-    yourSection: string;
-    affectedSections: SectionPreview[];
-  };
-  withoutContent?: {
-    yourSection: string;
-    affectedSections: SectionPreview[];
-  };
-  // For how-much
-  briefVersion?: {
-    yourSection: string;
-    affectedSections: SectionPreview[];
-  };
-  detailedVersion?: {
-    yourSection: string;
-    affectedSections: SectionPreview[];
-  };
-};
+type PanelPhase = "question" | "generating" | "personal-chat";
 
 type InlineHelpPanelProps = {
   selectedText: string;
   selectionPosition: { top: number; left: number };
   writingBlockId: string;
+  currentWritingContent?: string;
   intentBlockId?: string;
   intentContent?: string;
   allIntents: IntentBlock[];
+  allWritingBlocks: WritingBlock[];  // Full document paragraphs
   userId: string;
   userName?: string;
   userEmail?: string;
-  onSubmit: (request: Omit<HelpRequest, 'id' | 'createdAt'>) => void;
+  onPreviewGenerated: (preview: ImpactPreview, helpRequest: HelpRequest) => void;
   onClose: () => void;
-  onAIJudgment?: (request: HelpRequest) => Promise<HelpRequest['aiJudgment']>;
 };
 
 export default function InlineHelpPanel({
   selectedText,
   selectionPosition,
   writingBlockId,
+  currentWritingContent,
   intentBlockId,
   intentContent,
   allIntents,
+  allWritingBlocks,
   userId,
   userName,
   userEmail,
-  onSubmit,
+  onPreviewGenerated,
   onClose,
-  onAIJudgment,
 }: InlineHelpPanelProps) {
   const [phase, setPhase] = useState<PanelPhase>("question");
   const [selectedStem, setSelectedStem] = useState<string | null>(null);
   const [fillInText, setFillInText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [aiJudgment, setAiJudgment] = useState<HelpRequest['aiJudgment'] | null>(null);
 
   // Chat state for personal resolution
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [isChatLoading, setIsChatLoading] = useState(false);
 
-  // Impact preview state for team escalation
-  const [impactPreview, setImpactPreview] = useState<ImpactPreview | null>(null);
-  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
-  const [selectedOption, setSelectedOption] = useState<"A" | "B" | null>(null);
+  // AI judgment result
+  const [aiJudgment, setAiJudgment] = useState<HelpRequest['aiJudgment'] | null>(null);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -170,13 +128,6 @@ export default function InlineHelpPanel({
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
   }, [chatMessages]);
-
-  // Load impact preview when entering team-escalation phase
-  useEffect(() => {
-    if (phase === "team-escalation" && !impactPreview && !isLoadingPreview) {
-      loadImpactPreview();
-    }
-  }, [phase]);
 
   // Close on click outside
   useEffect(() => {
@@ -213,85 +164,97 @@ export default function InlineHelpPanel({
     return `${stem.stem} ${fillInText}`;
   };
 
-  const loadImpactPreview = async () => {
-    setIsLoadingPreview(true);
-    try {
-      const response = await fetch('/api/generate-impact-preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          questionType: selectedStem,
-          question: getFullQuestion(),
-          selectedText,
-          intentContent,
-          allIntents: allIntents.map(i => ({
-            id: i.id,
-            content: i.content,
-            level: i.level,
-          })),
-        }),
-      });
-
-      if (response.ok) {
-        const preview = await response.json();
-        setImpactPreview(preview);
-      }
-    } catch (error) {
-      console.error('Failed to load impact preview:', error);
-    } finally {
-      setIsLoadingPreview(false);
-    }
-  };
-
   const handleSubmit = async () => {
     const fullQuestion = getFullQuestion();
     if (!fullQuestion.trim()) return;
 
     setIsSubmitting(true);
-    setPhase("judging");
+    setPhase("generating");
 
-    const helpRequest: Omit<HelpRequest, 'id' | 'createdAt'> = {
-      createdBy: userId,
-      createdByName: userName,
-      createdByEmail: userEmail,
-      question: fullQuestion.trim(),
-      tags: selectedStem ? [selectedStem] : [],
-      writingBlockId,
-      intentBlockId,
-      selectedText,
-      status: 'pending',
-    };
+    // First, judge if this is team-relevant
+    try {
+      const judgeResponse = await fetch('/api/judge-help-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: fullQuestion,
+          selectedText,
+          currentIntentId: intentBlockId,
+          currentIntentContent: intentContent,
+          allIntents: allIntents.map(i => ({
+            id: i.id,
+            content: i.content,
+            parentId: i.parentId,
+            level: i.level,
+          })),
+        }),
+      });
 
-    let isTeamRelevant = false;
+      const judgment = await judgeResponse.json();
+      setAiJudgment(judgment);
 
-    if (onAIJudgment) {
-      try {
-        const fullRequest: HelpRequest = {
-          ...helpRequest,
+      if (judgment.isTeamRelevant) {
+        // Generate preview for team-relevant questions
+        // Pass FULL document structure for proper analysis
+        const previewResponse = await fetch('/api/generate-impact-preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            questionType: selectedStem,
+            question: fullQuestion,
+            selectedText,
+            currentIntentId: intentBlockId,
+            // Full intent hierarchy
+            allIntents: allIntents.map(i => ({
+              id: i.id,
+              content: i.content,
+              parentId: i.parentId,
+              level: i.level,
+            })),
+            // Full document paragraphs with their linked intents
+            allWritingBlocks: allWritingBlocks.map(wb => ({
+              id: wb.id,
+              linkedIntentId: wb.linkedIntentId,
+              content: wb.content,
+            })),
+          }),
+        });
+
+        const preview = await previewResponse.json();
+
+        // Create HelpRequest with preview
+        const helpRequest: HelpRequest = {
           id: `help-${Date.now()}`,
+          createdBy: userId,
+          createdByName: userName,
+          createdByEmail: userEmail,
           createdAt: Date.now(),
+          question: fullQuestion,
+          questionType: selectedStem || undefined,
+          tags: selectedStem ? [selectedStem] : [],
+          writingBlockId,
+          intentBlockId,
+          selectedText,
+          aiJudgment: judgment,
+          impactPreview: preview,
+          status: 'previewing',
         };
 
-        const judgment = await onAIJudgment(fullRequest);
-        setAiJudgment(judgment);
-        helpRequest.aiJudgment = judgment;
-        helpRequest.status = judgment?.isTeamRelevant ? 'team' : 'personal';
-        isTeamRelevant = judgment?.isTeamRelevant ?? false;
-      } catch (error) {
-        console.error('[HelpPanel] AI judgment failed:', error);
-        isTeamRelevant = false;
+        // Notify parent to show preview in editor/intent panels
+        onPreviewGenerated(preview, helpRequest);
+        onClose(); // Close this panel - preview will show in the actual editor
+
+      } else {
+        // Personal question - show AI chat
+        setPhase("personal-chat");
+        await getAISuggestion(fullQuestion);
       }
+    } catch (error) {
+      console.error('[HelpPanel] Error:', error);
+      setPhase("question");
+    } finally {
+      setIsSubmitting(false);
     }
-
-    if (isTeamRelevant) {
-      setPhase("team-escalation");
-    } else {
-      setPhase("personal-chat");
-      await getAISuggestion(fullQuestion);
-    }
-
-    onSubmit(helpRequest);
-    setIsSubmitting(false);
   };
 
   const getAISuggestion = async (question: string, isFollowUp = false) => {
@@ -341,307 +304,6 @@ export default function InlineHelpPanel({
   };
 
   const currentStem = QUESTION_STEMS.find(s => s.id === selectedStem);
-
-  // Render a single section preview block
-  const renderSectionBlock = (
-    section: SectionPreview,
-    colorClass: string
-  ) => {
-    const bgClass = section.changeType === "modified"
-      ? `${colorClass}/10`
-      : section.changeType === "unchanged"
-        ? "bg-gray-50 dark:bg-gray-800/50"
-        : `${colorClass}/5`;
-
-    const borderClass = section.changeType === "modified"
-      ? colorClass.replace("bg-", "border-")
-      : "border-gray-200 dark:border-gray-700";
-
-    return (
-      <div
-        key={section.intentId}
-        className={`p-2 rounded border ${bgClass} ${borderClass} ${
-          section.changeType === "modified" ? "border-l-2" : ""
-        }`}
-      >
-        <div className="text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 truncate">
-          {section.intentContent}
-        </div>
-        <div className="text-xs text-gray-700 dark:text-gray-300 line-clamp-2">
-          {section.previewText}
-        </div>
-        {section.changeType === "modified" && (
-          <div className="text-[10px] text-orange-600 dark:text-orange-400 mt-1 flex items-center gap-1">
-            <ArrowRight className="h-2.5 w-2.5" />
-            may need updates
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Render "Choose Between" side-by-side diff preview
-  const renderChooseBetweenPreview = () => {
-    if (!impactPreview?.optionA || !impactPreview?.optionB) return null;
-
-    return (
-      <div className="grid grid-cols-2 gap-3">
-        {/* Option A Column */}
-        <div
-          className={`rounded-lg border-2 cursor-pointer transition-all overflow-hidden ${
-            selectedOption === "A"
-              ? "border-blue-500 ring-2 ring-blue-200 dark:ring-blue-800"
-              : "border-gray-200 dark:border-gray-700 hover:border-blue-300"
-          }`}
-          onClick={() => setSelectedOption("A")}
-        >
-          <div className={`px-3 py-2 flex items-center justify-between ${
-            selectedOption === "A" ? "bg-blue-500 text-white" : "bg-gray-100 dark:bg-gray-800"
-          }`}>
-            <span className="text-xs font-semibold truncate">
-              {impactPreview.optionA.label}
-            </span>
-            {selectedOption === "A" && <CheckCircle className="h-3.5 w-3.5 flex-shrink-0" />}
-          </div>
-
-          <div className="p-2 space-y-2">
-            {/* Your section */}
-            <div className="p-2 rounded bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
-              <div className="text-[10px] font-medium text-blue-600 dark:text-blue-400 mb-1">Your section</div>
-              <div className="text-xs text-gray-700 dark:text-gray-300 line-clamp-3">
-                {impactPreview.optionA.yourSection}
-              </div>
-            </div>
-
-            {/* Affected sections */}
-            {impactPreview.optionA.affectedSections?.length > 0 && (
-              <div className="space-y-1.5">
-                <div className="text-[10px] font-medium text-gray-500 flex items-center gap-1">
-                  <Users className="h-3 w-3" />
-                  Others may write:
-                </div>
-                {impactPreview.optionA.affectedSections.map(section =>
-                  renderSectionBlock(section, "bg-blue-500")
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Option B Column */}
-        <div
-          className={`rounded-lg border-2 cursor-pointer transition-all overflow-hidden ${
-            selectedOption === "B"
-              ? "border-purple-500 ring-2 ring-purple-200 dark:ring-purple-800"
-              : "border-gray-200 dark:border-gray-700 hover:border-purple-300"
-          }`}
-          onClick={() => setSelectedOption("B")}
-        >
-          <div className={`px-3 py-2 flex items-center justify-between ${
-            selectedOption === "B" ? "bg-purple-500 text-white" : "bg-gray-100 dark:bg-gray-800"
-          }`}>
-            <span className="text-xs font-semibold truncate">
-              {impactPreview.optionB.label}
-            </span>
-            {selectedOption === "B" && <CheckCircle className="h-3.5 w-3.5 flex-shrink-0" />}
-          </div>
-
-          <div className="p-2 space-y-2">
-            {/* Your section */}
-            <div className="p-2 rounded bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800">
-              <div className="text-[10px] font-medium text-purple-600 dark:text-purple-400 mb-1">Your section</div>
-              <div className="text-xs text-gray-700 dark:text-gray-300 line-clamp-3">
-                {impactPreview.optionB.yourSection}
-              </div>
-            </div>
-
-            {/* Affected sections */}
-            {impactPreview.optionB.affectedSections?.length > 0 && (
-              <div className="space-y-1.5">
-                <div className="text-[10px] font-medium text-gray-500 flex items-center gap-1">
-                  <Users className="h-3 w-3" />
-                  Others may write:
-                </div>
-                {impactPreview.optionB.affectedSections.map(section =>
-                  renderSectionBlock(section, "bg-purple-500")
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // Render "Add/Remove" side-by-side preview
-  const renderAddRemovePreview = () => {
-    if (!impactPreview?.withContent && !impactPreview?.withoutContent) return null;
-
-    return (
-      <div className="grid grid-cols-2 gap-3">
-        {/* With Content Column */}
-        <div
-          className={`rounded-lg border-2 cursor-pointer transition-all overflow-hidden ${
-            selectedOption === "A"
-              ? "border-green-500 ring-2 ring-green-200 dark:ring-green-800"
-              : "border-gray-200 dark:border-gray-700 hover:border-green-300"
-          }`}
-          onClick={() => setSelectedOption("A")}
-        >
-          <div className={`px-3 py-2 flex items-center justify-between ${
-            selectedOption === "A" ? "bg-green-500 text-white" : "bg-gray-100 dark:bg-gray-800"
-          }`}>
-            <span className="text-xs font-semibold">+ Keep / Add</span>
-            {selectedOption === "A" && <CheckCircle className="h-3.5 w-3.5" />}
-          </div>
-
-          <div className="p-2 space-y-2">
-            <div className="p-2 rounded bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
-              <div className="text-[10px] font-medium text-green-600 dark:text-green-400 mb-1">Your section</div>
-              <div className="text-xs text-gray-700 dark:text-gray-300 line-clamp-3">
-                {impactPreview.withContent?.yourSection}
-              </div>
-            </div>
-
-            {(impactPreview.withContent?.affectedSections?.length ?? 0) > 0 && (
-              <div className="space-y-1.5">
-                <div className="text-[10px] font-medium text-gray-500 flex items-center gap-1">
-                  <Users className="h-3 w-3" />
-                  Others may write:
-                </div>
-                {impactPreview.withContent?.affectedSections?.map(section =>
-                  renderSectionBlock(section, "bg-green-500")
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Without Content Column */}
-        <div
-          className={`rounded-lg border-2 cursor-pointer transition-all overflow-hidden ${
-            selectedOption === "B"
-              ? "border-red-500 ring-2 ring-red-200 dark:ring-red-800"
-              : "border-gray-200 dark:border-gray-700 hover:border-red-300"
-          }`}
-          onClick={() => setSelectedOption("B")}
-        >
-          <div className={`px-3 py-2 flex items-center justify-between ${
-            selectedOption === "B" ? "bg-red-500 text-white" : "bg-gray-100 dark:bg-gray-800"
-          }`}>
-            <span className="text-xs font-semibold">- Remove / Skip</span>
-            {selectedOption === "B" && <CheckCircle className="h-3.5 w-3.5" />}
-          </div>
-
-          <div className="p-2 space-y-2">
-            <div className="p-2 rounded bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
-              <div className="text-[10px] font-medium text-red-600 dark:text-red-400 mb-1">Your section</div>
-              <div className="text-xs text-gray-700 dark:text-gray-300 line-clamp-3">
-                {impactPreview.withoutContent?.yourSection}
-              </div>
-            </div>
-
-            {(impactPreview.withoutContent?.affectedSections?.length ?? 0) > 0 && (
-              <div className="space-y-1.5">
-                <div className="text-[10px] font-medium text-gray-500 flex items-center gap-1">
-                  <Users className="h-3 w-3" />
-                  Others may write:
-                </div>
-                {impactPreview.withoutContent?.affectedSections?.map(section =>
-                  renderSectionBlock(section, "bg-red-500")
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // Render "How Much Detail" side-by-side preview
-  const renderHowMuchPreview = () => {
-    if (!impactPreview?.briefVersion && !impactPreview?.detailedVersion) return null;
-
-    return (
-      <div className="grid grid-cols-2 gap-3">
-        {/* Brief Version Column */}
-        <div
-          className={`rounded-lg border-2 cursor-pointer transition-all overflow-hidden ${
-            selectedOption === "A"
-              ? "border-blue-500 ring-2 ring-blue-200 dark:ring-blue-800"
-              : "border-gray-200 dark:border-gray-700 hover:border-blue-300"
-          }`}
-          onClick={() => setSelectedOption("A")}
-        >
-          <div className={`px-3 py-2 flex items-center justify-between ${
-            selectedOption === "A" ? "bg-blue-500 text-white" : "bg-gray-100 dark:bg-gray-800"
-          }`}>
-            <span className="text-xs font-semibold">Brief</span>
-            {selectedOption === "A" && <CheckCircle className="h-3.5 w-3.5" />}
-          </div>
-
-          <div className="p-2 space-y-2">
-            <div className="p-2 rounded bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
-              <div className="text-[10px] font-medium text-blue-600 dark:text-blue-400 mb-1">Your section</div>
-              <div className="text-xs text-gray-700 dark:text-gray-300 line-clamp-3">
-                {impactPreview.briefVersion?.yourSection}
-              </div>
-            </div>
-
-            {(impactPreview.briefVersion?.affectedSections?.length ?? 0) > 0 && (
-              <div className="space-y-1.5">
-                <div className="text-[10px] font-medium text-gray-500 flex items-center gap-1">
-                  <Users className="h-3 w-3" />
-                  Others may write:
-                </div>
-                {impactPreview.briefVersion?.affectedSections?.map(section =>
-                  renderSectionBlock(section, "bg-blue-500")
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Detailed Version Column */}
-        <div
-          className={`rounded-lg border-2 cursor-pointer transition-all overflow-hidden ${
-            selectedOption === "B"
-              ? "border-purple-500 ring-2 ring-purple-200 dark:ring-purple-800"
-              : "border-gray-200 dark:border-gray-700 hover:border-purple-300"
-          }`}
-          onClick={() => setSelectedOption("B")}
-        >
-          <div className={`px-3 py-2 flex items-center justify-between ${
-            selectedOption === "B" ? "bg-purple-500 text-white" : "bg-gray-100 dark:bg-gray-800"
-          }`}>
-            <span className="text-xs font-semibold">Detailed</span>
-            {selectedOption === "B" && <CheckCircle className="h-3.5 w-3.5" />}
-          </div>
-
-          <div className="p-2 space-y-2">
-            <div className="p-2 rounded bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800">
-              <div className="text-[10px] font-medium text-purple-600 dark:text-purple-400 mb-1">Your section</div>
-              <div className="text-xs text-gray-700 dark:text-gray-300 line-clamp-3">
-                {impactPreview.detailedVersion?.yourSection}
-              </div>
-            </div>
-
-            {(impactPreview.detailedVersion?.affectedSections?.length ?? 0) > 0 && (
-              <div className="space-y-1.5">
-                <div className="text-[10px] font-medium text-gray-500 flex items-center gap-1">
-                  <Users className="h-3 w-3" />
-                  Others may write:
-                </div>
-                {impactPreview.detailedVersion?.affectedSections?.map(section =>
-                  renderSectionBlock(section, "bg-purple-500")
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
 
   const renderContent = () => {
     switch (phase) {
@@ -704,7 +366,7 @@ export default function InlineHelpPanel({
             <div className="flex items-center justify-between px-3 py-2 border-t border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50">
               <div className="text-xs text-muted-foreground">
                 <MessageSquare className="h-3 w-3 inline mr-1" />
-                AI will check if this needs team input
+                Preview will show in the editor
               </div>
               <div className="flex gap-2">
                 <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
@@ -716,12 +378,12 @@ export default function InlineHelpPanel({
           </>
         );
 
-      case "judging":
+      case "generating":
         return (
           <div className="p-6 flex flex-col items-center justify-center">
             <Loader2 className="h-8 w-8 animate-spin text-blue-500 mb-3" />
-            <div className="text-sm font-medium">Analyzing your question...</div>
-            <div className="text-xs text-muted-foreground mt-1">Checking if this needs team input</div>
+            <div className="text-sm font-medium">Generating preview...</div>
+            <div className="text-xs text-muted-foreground mt-1">This will appear in the editor</div>
           </div>
         );
 
@@ -785,75 +447,17 @@ export default function InlineHelpPanel({
             </div>
           </>
         );
-
-      case "team-escalation":
-        return (
-          <>
-            <div className="px-3 py-2 bg-orange-50 dark:bg-orange-900/20 border-b border-orange-100 dark:border-orange-800">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-orange-600" />
-                <span className="text-sm font-medium text-orange-800 dark:text-orange-200">This may need team input</span>
-              </div>
-              {aiJudgment?.reason && (
-                <div className="text-xs text-orange-700 dark:text-orange-300 mt-1">{aiJudgment.reason}</div>
-              )}
-            </div>
-
-            <div className="px-3 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-100 dark:border-gray-800">
-              <div className="flex items-center gap-2">
-                <GitCompare className="h-4 w-4 text-gray-500" />
-                <span className="text-xs font-medium text-gray-600 dark:text-gray-400">Preview the options</span>
-              </div>
-            </div>
-
-            <div className="p-3 overflow-y-auto max-h-[400px]">
-              {isLoadingPreview ? (
-                <div className="flex flex-col items-center justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-orange-500 mb-2" />
-                  <div className="text-sm text-muted-foreground">Generating preview...</div>
-                </div>
-              ) : (
-                <>
-                  {selectedStem === "choose-between" && renderChooseBetweenPreview()}
-                  {selectedStem === "add-remove" && renderAddRemovePreview()}
-                  {selectedStem === "how-much" && renderHowMuchPreview()}
-
-                  {/* Generic fallback for other types */}
-                  {!["choose-between", "add-remove", "how-much"].includes(selectedStem || "") && (
-                    <div className="text-sm text-gray-600 dark:text-gray-400 text-center py-4">
-                      This question type affects team coordination. Click "Ask Team" to discuss.
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-
-            <div className="flex justify-between px-3 py-2 border-t border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50">
-              <Button variant="ghost" size="sm" onClick={onClose}>
-                Decide myself
-              </Button>
-              <Button size="sm" className="bg-orange-500 hover:bg-orange-600">
-                <Users className="h-4 w-4 mr-1" />
-                Ask Team
-              </Button>
-            </div>
-          </>
-        );
     }
   };
-
-  // Wider panel for team escalation with side-by-side preview
-  const panelWidth = phase === "team-escalation" ? 600 : 480;
 
   return (
     <div
       ref={panelRef}
-      className={`fixed z-50 bg-white dark:bg-gray-900 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 flex flex-col`}
+      className="fixed z-50 w-[420px] bg-white dark:bg-gray-900 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 flex flex-col"
       style={{
-        width: panelWidth,
-        top: Math.min(selectionPosition.top + 10, window.innerHeight - 600),
-        left: Math.min(selectionPosition.left, window.innerWidth - panelWidth - 20),
-        maxHeight: "600px",
+        top: Math.min(selectionPosition.top + 10, window.innerHeight - 500),
+        left: Math.min(selectionPosition.left, window.innerWidth - 440),
+        maxHeight: "480px",
       }}
     >
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100 dark:border-gray-800">
@@ -861,9 +465,8 @@ export default function InlineHelpPanel({
           <HelpCircle className="h-4 w-4 text-blue-500" />
           <span className="text-sm font-medium">
             {phase === "question" && "What's your uncertainty?"}
-            {phase === "judging" && "Analyzing..."}
+            {phase === "generating" && "Generating..."}
             {phase === "personal-chat" && "AI Assistant"}
-            {phase === "team-escalation" && "Team Input Needed"}
           </span>
         </div>
         <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={onClose}>

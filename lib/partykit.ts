@@ -59,6 +59,52 @@ export type RuleBlock = {
   sourceRubric?: string; // Original rubric text that generated this rule (optional)
 };
 
+// Section preview for impact visualization
+export type SectionPreview = {
+  intentId: string;
+  intentContent: string;
+  originalText?: string;  // Current text (if exists)
+  previewText: string;    // How it would look with this option
+  changeType: "added" | "removed" | "modified" | "unchanged";
+};
+
+// Paragraph preview - shows how a paragraph would change
+export type ParagraphPreview = {
+  intentId: string;          // Root intent ID (level 0)
+  intentContent: string;     // Root intent content
+  currentContent: string;    // Current paragraph content
+  previewContent: string;    // How it would change
+  changeType: "modified" | "unchanged";
+  reason?: string;           // Why this paragraph is affected
+};
+
+// Impact preview - stored with HelpRequest for team negotiation
+export type ImpactPreview = {
+  questionType: string;  // "choose-between" | "add-remove" | "how-much" | etc.
+
+  // Option A preview - "Keep Current" (the existing approach)
+  optionA: {
+    label: string;
+    isCurrentState?: boolean;  // true = this represents current state
+    intentChanges: SectionPreview[];      // Changes to intent structure
+    paragraphPreviews: ParagraphPreview[]; // Changes to paragraphs
+  };
+
+  // Option B preview - "Make Change" (the proposed modification)
+  optionB: {
+    label: string;
+    isCurrentState?: boolean;  // false = this represents the proposed change
+    intentChanges: SectionPreview[];
+    paragraphPreviews: ParagraphPreview[];
+  };
+
+  primaryIntentId?: string;  // The main intent this question is about
+  affectedIntentIds?: string[];  // All intents that might be affected
+  affectedRootIntentIds?: string[];  // Only level-0 intents affected
+  needsTeamDiscussion?: boolean;  // True if changes affect multiple root intents
+  generatedAt: number;
+};
+
 // Help Request - for writer to articulate uncertainty/questions during writing
 export type HelpRequest = {
   id: string;
@@ -69,7 +115,8 @@ export type HelpRequest = {
 
   // The question/uncertainty
   question: string;
-  tags?: string[]; // Optional tags: "不确定", "需决策", "需信息", "需确认"
+  questionType?: string;  // "choose-between" | "add-remove" | "how-much" | etc.
+  tags?: string[];
 
   // Context - where this was raised
   writingBlockId: string;
@@ -87,8 +134,33 @@ export type HelpRequest = {
     reason: string;
   };
 
-  // Status flow: pending -> ai_processing -> personal/team -> resolved
-  status: 'pending' | 'ai_processing' | 'personal' | 'team' | 'resolved';
+  // Impact preview - for visualization and team negotiation
+  impactPreview?: ImpactPreview;
+
+  // User's selected option (after viewing preview)
+  selectedOption?: "A" | "B";
+
+  // Team discussion data (when status = 'team')
+  teamDiscussion?: {
+    participationType: "vote" | "feedback" | "execute" | "tentative";
+    initiatorThoughts: string;  // What the initiator thinks/wants to discuss
+    selectedOption: "A" | "B" | null;  // Option chosen by initiator (for execute/tentative)
+    requiredResponders: string[];  // User IDs who must respond
+    optionalResponders: string[];  // User IDs who can optionally respond
+    responses: Array<{
+      userId: string;
+      userName?: string;
+      userEmail?: string;
+      vote?: "A" | "B";  // For vote type
+      comment?: string;  // For feedback/comment
+      respondedAt: number;
+    }>;
+    resolvedAt?: number;
+    resolvedOption?: "A" | "B";
+  };
+
+  // Status flow: pending -> ai_processing -> previewing -> personal/team -> resolved
+  status: 'pending' | 'ai_processing' | 'previewing' | 'personal' | 'team' | 'resolved';
 };
 
 export type RoomState = {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useEffect, useState, useCallback, useRef } from "react";
-import type { WritingBlock, IntentBlock, HelpRequest } from "@/lib/partykit";
+import type { WritingBlock, IntentBlock, HelpRequest, ImpactPreview } from "@/lib/partykit";
 import type { User } from "@supabase/supabase-js";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -60,6 +60,11 @@ type WritingEditorProps = {
   onRegisterYjsExporter?: (blockId: string, exporter: () => Uint8Array) => void;
   onActiveWritingBlockChange?: (intentId: string | null) => void;
   addHelpRequest?: (request: HelpRequest) => void;
+  // Preview mode callbacks
+  onPreviewActive?: (preview: ImpactPreview | null, helpRequest: HelpRequest | null) => void;
+  activePreview?: ImpactPreview | null;
+  activeHelpRequest?: HelpRequest | null;
+  previewSelectedOption?: "A" | "B" | null;
 };
 
 // Generate a consistent color for a user based on their ID
@@ -73,6 +78,152 @@ function getUserColor(userId: string): string {
     hash = userId.charCodeAt(i) + ((hash << 5) - hash);
   }
   return colors[Math.abs(hash) % colors.length];
+}
+
+// Writing Preview Overlay - shows side-by-side comparison of how writing would differ
+function WritingPreviewOverlay({
+  activePreview,
+  selectedOption,
+  intentId,
+  currentContent,
+}: {
+  activePreview: ImpactPreview;
+  selectedOption?: "A" | "B" | null;
+  intentId: string;
+  currentContent: string;
+}) {
+  // Get paragraph previews for both options
+  const previewA = activePreview.optionA.paragraphPreviews?.find(
+    (p) => p.intentId === intentId
+  );
+  const previewB = activePreview.optionB.paragraphPreviews?.find(
+    (p) => p.intentId === intentId
+  );
+
+  // Debug: Log what we're looking for and what we got
+  console.log("[WritingPreviewOverlay] Looking for intentId:", intentId);
+  console.log("[WritingPreviewOverlay] Option A paragraphPreviews:", activePreview.optionA.paragraphPreviews);
+  console.log("[WritingPreviewOverlay] Option B paragraphPreviews:", activePreview.optionB.paragraphPreviews);
+  console.log("[WritingPreviewOverlay] Found previewA:", previewA);
+  console.log("[WritingPreviewOverlay] Found previewB:", previewB);
+
+  // Check if we have actual written content
+  const hasWrittenContent = currentContent && currentContent.trim().length > 0;
+
+  // Left side (Keep Current):
+  // - If written: show actual content
+  // - If not written: show AI-generated preview of what WOULD be written with current intent
+  const leftContent = hasWrittenContent
+    ? currentContent
+    : (previewA?.previewContent || "(Generating what would be written with current intent...)");
+
+  const leftReason = hasWrittenContent
+    ? "Your current writing"
+    : (previewA?.reason || "What teammate would write following current intent");
+
+  const leftIsGenerated = !hasWrittenContent && previewA?.previewContent;
+
+  // Right side (Make Change): Show what it would become with modified intent
+  const rightContent = previewB?.previewContent || "(Generating preview...)";
+  const rightReason = previewB?.reason || "How writing would change with new intent";
+
+  // If no previews at all, show loading indicator
+  if (!previewA && !previewB) {
+    return (
+      <div className="min-h-[200px] bg-orange-50 dark:bg-orange-900/20 border-2 border-orange-300 border-dashed rounded-lg flex items-center justify-center">
+        <div className="text-center text-orange-600 text-sm">
+          <span className="font-medium">Preview Mode</span>
+          <br />
+          <span className="text-xs">Generating writing preview...</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-[200px] bg-white dark:bg-gray-900 border-2 border-orange-400 rounded-lg overflow-hidden shadow-lg">
+      {/* Header */}
+      <div className="px-3 py-2 bg-orange-100 dark:bg-orange-900/30 border-b border-orange-300">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-orange-800 dark:text-orange-200">
+              📝 Writing Preview - How would this section change?
+            </span>
+          </div>
+          <span className="text-[10px] text-orange-600 dark:text-orange-400 bg-orange-200/50 px-2 py-0.5 rounded">
+            TEMPORARY PREVIEW
+          </span>
+        </div>
+      </div>
+
+      {/* Side-by-side comparison */}
+      <div className="grid grid-cols-2 h-[calc(100%-44px)] overflow-hidden">
+        {/* Option A - Left: CURRENT content */}
+        <div className={`border-r border-gray-300 dark:border-gray-600 overflow-auto transition-all ${
+          selectedOption === "A" ? "ring-2 ring-inset ring-blue-400" : ""
+        }`}>
+          <div className={`px-3 py-1.5 border-b sticky top-0 z-10 ${
+            selectedOption === "A"
+              ? "bg-blue-100 dark:bg-blue-900/30"
+              : "bg-gray-100 dark:bg-gray-800"
+          }`}>
+            <div className="flex items-center justify-between">
+              <span className={`text-[10px] font-semibold ${
+                selectedOption === "A" ? "text-blue-700" : "text-gray-600"
+              }`}>
+                {activePreview.optionA.label}
+              </span>
+              <span className="text-[9px] px-1.5 py-0.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded">
+                {hasWrittenContent ? "CURRENT" : "WOULD WRITE"}
+              </span>
+            </div>
+            {leftReason && (
+              <div className="text-[9px] text-gray-500 mt-0.5 italic">{leftReason}</div>
+            )}
+          </div>
+          <div className={`p-3 text-sm whitespace-pre-wrap leading-relaxed ${
+            hasWrittenContent
+              ? "text-gray-700 dark:text-gray-300"
+              : "text-gray-500 dark:text-gray-400 italic"
+          }`}>
+            {leftContent}
+          </div>
+        </div>
+
+        {/* Option B - Right: With MODIFIED intent */}
+        <div className={`overflow-auto transition-all ${
+          selectedOption === "B" ? "ring-2 ring-inset ring-purple-400" : ""
+        }`}>
+          <div className={`px-3 py-1.5 border-b sticky top-0 z-10 ${
+            selectedOption === "B"
+              ? "bg-purple-100 dark:bg-purple-900/30"
+              : "bg-gray-100 dark:bg-gray-800"
+          }`}>
+            <div className="flex items-center justify-between">
+              <span className={`text-[10px] font-semibold ${
+                selectedOption === "B" ? "text-purple-700" : "text-gray-600"
+              }`}>
+                {activePreview.optionB.label}
+              </span>
+              <span className="text-[9px] px-1.5 py-0.5 bg-purple-200 dark:bg-purple-800 text-purple-700 dark:text-purple-300 rounded">
+                {hasWrittenContent ? "WOULD CHANGE TO" : "WOULD WRITE"}
+              </span>
+            </div>
+            {rightReason && (
+              <div className="text-[9px] text-gray-500 mt-0.5 italic">{rightReason}</div>
+            )}
+          </div>
+          <div className={`p-3 text-sm whitespace-pre-wrap leading-relaxed ${
+            selectedOption === "B"
+              ? "text-purple-900 dark:text-purple-100 bg-purple-50/30 dark:bg-purple-900/10"
+              : "text-gray-700 dark:text-gray-300"
+          }`}>
+            {rightContent}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // Individual BlockNote editor for each root intent
@@ -91,6 +242,9 @@ function IntentEditor({
   onRegisterYjsExporter,
   onActiveWritingBlockChange,
   addHelpRequest,
+  onPreviewActive,
+  activePreview,
+  previewSelectedOption,
 }: {
   intent: IntentBlock;
   writingBlock: WritingBlock;
@@ -106,6 +260,9 @@ function IntentEditor({
   onRegisterYjsExporter?: (blockId: string, exporter: () => Uint8Array) => void;
   onActiveWritingBlockChange?: (intentId: string | null) => void;
   addHelpRequest?: (request: HelpRequest) => void;
+  onPreviewActive?: (preview: ImpactPreview | null, helpRequest: HelpRequest | null) => void;
+  activePreview?: ImpactPreview | null;
+  previewSelectedOption?: "A" | "B" | null;
 }) {
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>("");
@@ -797,61 +954,25 @@ function IntentEditor({
     };
   }, [editor, checkAlignment, lastCheckedContent, paragraphCount, previousContent]);
 
-  // Handle help request submission (don't close panel - let user continue chatting)
-  const handleHelpRequestSubmit = useCallback((request: Omit<HelpRequest, 'id' | 'createdAt'>) => {
-    if (!addHelpRequest) return;
+  // Handle preview generated from InlineHelpPanel (team-relevant questions)
+  const handlePreviewGenerated = useCallback((preview: ImpactPreview, helpRequest: HelpRequest) => {
+    // Store the help request
+    if (addHelpRequest) {
+      addHelpRequest(helpRequest);
+    }
+    // Notify parent to show preview in editor and intent panel
+    if (onPreviewActive) {
+      onPreviewActive(preview, helpRequest);
+    }
+  }, [addHelpRequest, onPreviewActive]);
 
-    const fullRequest: HelpRequest = {
-      ...request,
-      id: `help-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      createdAt: Date.now(),
-    };
-
-    addHelpRequest(fullRequest);
-    // Don't close panel here - user may want to continue chatting with AI
-  }, [addHelpRequest]);
-
-  // Handle closing the help panel (called when user clicks "Done" or outside)
+  // Handle closing the help panel
   const handleHelpPanelClose = useCallback(() => {
     setShowHelpPanel(false);
     setShowHelpButton(false);
     setSelectedText("");
     setSelectionPosition(null);
   }, []);
-
-  // Handle AI judgment for help request
-  const handleAIJudgment = useCallback(async (request: HelpRequest): Promise<HelpRequest['aiJudgment']> => {
-    try {
-      const response = await fetch('/api/judge-help-request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          question: request.question,
-          selectedText: request.selectedText,
-          currentIntentId: intent.id,
-          currentIntentContent: intent.content,
-          allIntents: allIntents.map(i => ({
-            id: i.id,
-            content: i.content,
-            parentId: i.parentId,
-            level: i.level,
-          })),
-        }),
-      });
-
-      if (response.ok) {
-        return await response.json();
-      }
-    } catch (error) {
-      console.error('AI judgment failed:', error);
-    }
-
-    // Default: assume it's a personal question if AI fails
-    return {
-      isTeamRelevant: false,
-      reason: '无法判断，默认为个人问题',
-    };
-  }, [intent.id, intent.content, allIntents]);
 
   // Manual alignment check handler
   const handleManualCheck = useCallback(async () => {
@@ -1036,36 +1157,53 @@ function IntentEditor({
         </div>
       )}
 
-      {/* BlockNote Editor */}
-      <div
-        ref={editorWrapperRef}
-        className="blocknote-editor-wrapper relative"
-        onFocus={() => {
-          if (onActiveWritingBlockChange) {
-            onActiveWritingBlockChange(intent.id);
-          }
-        }}
-        onBlur={() => {
-          if (onActiveWritingBlockChange) {
-            onActiveWritingBlockChange(null);
-          }
-        }}
-      >
-        {!provider ? (
-          <div className="p-4 text-sm text-muted-foreground">
-            Failed to initialize editor. Please refresh the page.
-          </div>
-        ) : !isSynced ? (
-          <div className="p-4 flex items-center gap-2 text-sm text-muted-foreground">
-            <div className="h-4 w-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
-            <span>Loading content...</span>
-          </div>
-        ) : (
-          <BlockNoteView editor={editor} theme="light" formattingToolbar={true} />
+      {/* BlockNote Editor Container - with relative positioning for overlay */}
+      <div className="relative min-h-[200px]">
+        {/* Writing Preview Overlay - rendered ABOVE the editor when active */}
+        {activePreview && activePreview.affectedRootIntentIds?.includes(intent.id) && (
+          <WritingPreviewOverlay
+            activePreview={activePreview}
+            selectedOption={previewSelectedOption}
+            intentId={intent.id}
+            currentContent={editorContent}
+          />
         )}
 
-        {/* Alignment Overlay - rendered on top when showAlignment is true */}
-        {renderAlignmentOverlay}
+        {/* BlockNote Editor - hidden when preview is active */}
+        <div
+          ref={editorWrapperRef}
+          className={`blocknote-editor-wrapper ${
+            activePreview && activePreview.affectedRootIntentIds?.includes(intent.id)
+              ? "invisible"
+              : ""
+          }`}
+          onFocus={() => {
+            if (onActiveWritingBlockChange) {
+              onActiveWritingBlockChange(intent.id);
+            }
+          }}
+          onBlur={() => {
+            if (onActiveWritingBlockChange) {
+              onActiveWritingBlockChange(null);
+            }
+          }}
+        >
+          {!provider ? (
+            <div className="p-4 text-sm text-muted-foreground">
+              Failed to initialize editor. Please refresh the page.
+            </div>
+          ) : !isSynced ? (
+            <div className="p-4 flex items-center gap-2 text-sm text-muted-foreground">
+              <div className="h-4 w-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
+              <span>Loading content...</span>
+            </div>
+          ) : (
+            <BlockNoteView editor={editor} theme="light" formattingToolbar={true} />
+          )}
+
+          {/* Alignment Overlay - rendered on top when showAlignment is true */}
+          {renderAlignmentOverlay}
+        </div>
       </div>
 
 
@@ -1101,15 +1239,16 @@ function IntentEditor({
           selectedText={selectedText}
           selectionPosition={selectionPosition}
           writingBlockId={writingBlock.id}
+          currentWritingContent={editorContent}
           intentBlockId={intent.id}
           intentContent={intent.content}
           allIntents={allIntents}
+          allWritingBlocks={writingBlocks}
           userId={user.id}
           userName={user.user_metadata?.name || user.email?.split('@')[0]}
           userEmail={user.email || undefined}
-          onSubmit={handleHelpRequestSubmit}
+          onPreviewGenerated={handlePreviewGenerated}
           onClose={handleHelpPanelClose}
-          onAIJudgment={handleAIJudgment}
         />
       )}
 
@@ -1240,6 +1379,10 @@ export default function WritingEditor({
   onRegisterYjsExporter,
   onActiveWritingBlockChange,
   addHelpRequest,
+  onPreviewActive,
+  activePreview,
+  activeHelpRequest,
+  previewSelectedOption,
 }: WritingEditorProps) {
   // Ensure we have writing blocks for all root-level intents
   useEffect(() => {
@@ -1280,42 +1423,48 @@ export default function WritingEditor({
   };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-4xl mx-auto p-6 space-y-4">
-        {rootIntents.length === 0 ? (
-          <div className="text-center py-12 text-muted-foreground">
-            <p>No intent structure yet</p>
-            <p className="text-sm mt-2">Create intent blocks to start writing</p>
-          </div>
-        ) : (
-          rootIntents.map((intent) => {
-            const writingBlock = intentToWritingMap.get(intent.id);
-            if (!writingBlock) return null;
+    <>
+      <div className="h-full overflow-y-auto">
+        <div className="max-w-4xl mx-auto p-6 space-y-4">
+          {rootIntents.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <p>No intent structure yet</p>
+              <p className="text-sm mt-2">Create intent blocks to start writing</p>
+            </div>
+          ) : (
+            rootIntents.map((intent) => {
+              const writingBlock = intentToWritingMap.get(intent.id);
+              if (!writingBlock) return null;
 
-            const childIntents = getChildIntents(intent.id);
+              const childIntents = getChildIntents(intent.id);
 
-            return (
-              <IntentEditor
-                key={intent.id}
-                intent={intent}
-                writingBlock={writingBlock}
-                roomId={roomId}
-                user={user}
-                childIntents={childIntents}
-                allIntents={intentBlocks}
-                onAlignmentChange={onAlignmentChange}
-                onHoverIntent={onHoverIntent}
-                writingBlocks={writingBlocks}
-                deleteWritingBlock={deleteWritingBlock}
-                updateIntentBlock={updateIntentBlock}
-                onRegisterYjsExporter={onRegisterYjsExporter}
-                onActiveWritingBlockChange={onActiveWritingBlockChange}
-                addHelpRequest={addHelpRequest}
-              />
-            );
-          })
-        )}
+              return (
+                <IntentEditor
+                  key={intent.id}
+                  intent={intent}
+                  writingBlock={writingBlock}
+                  roomId={roomId}
+                  user={user}
+                  childIntents={childIntents}
+                  allIntents={intentBlocks}
+                  onAlignmentChange={onAlignmentChange}
+                  onHoverIntent={onHoverIntent}
+                  writingBlocks={writingBlocks}
+                  deleteWritingBlock={deleteWritingBlock}
+                  updateIntentBlock={updateIntentBlock}
+                  onRegisterYjsExporter={onRegisterYjsExporter}
+                  onActiveWritingBlockChange={onActiveWritingBlockChange}
+                  addHelpRequest={addHelpRequest}
+                  onPreviewActive={onPreviewActive}
+                  activePreview={activePreview}
+                  previewSelectedOption={previewSelectedOption}
+                />
+              );
+            })
+          )}
+        </div>
       </div>
-    </div>
+
+    </>
   );
 }

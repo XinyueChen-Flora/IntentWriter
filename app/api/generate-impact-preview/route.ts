@@ -14,28 +14,54 @@ export type PreviewType =
   | "terminology"
   | "placement";
 
-type SectionPreview = {
+// Intent with full hierarchy info
+type IntentInfo = {
+  id: string;
+  content: string;
+  parentId: string | null;
+  level: number;
+};
+
+// Writing block with linked intent
+type WritingBlockInfo = {
+  id: string;
+  linkedIntentId: string | null;
+  content: string;  // The actual paragraph content
+};
+
+type SectionChange = {
   intentId: string;
   intentContent: string;
+  originalText?: string;
   previewText: string;
+  changeType: "added" | "removed" | "modified" | "unchanged";
+};
+
+// Each affected paragraph preview
+type ParagraphPreview = {
+  intentId: string;          // Root intent ID (level 0)
+  intentContent: string;     // Root intent content
+  currentContent: string;    // Current paragraph content
+  previewContent: string;    // How it would change
   changeType: "modified" | "unchanged";
+  reason?: string;           // Why this paragraph is affected
 };
 
 type OptionPreview = {
   label: string;
-  yourSection: string;
-  affectedSections: SectionPreview[];
+  intentChanges: SectionChange[];      // Changes to intent structure
+  paragraphPreviews: ParagraphPreview[]; // Changes to paragraphs
 };
 
-export type ImpactPreview = {
-  type: PreviewType;
-  originalText: string;
-  optionA?: OptionPreview;
-  optionB?: OptionPreview;
-  withContent?: OptionPreview;
-  withoutContent?: OptionPreview;
-  briefVersion?: OptionPreview;
-  detailedVersion?: OptionPreview;
+export type ImpactPreviewResponse = {
+  questionType: PreviewType;
+  optionA: OptionPreview;
+  optionB: OptionPreview;
+  affectedIntentIds: string[];  // All intents that might be affected
+  affectedRootIntentIds: string[];  // Root-level (level 0) intents affected
+  needsTeamDiscussion: boolean;  // True if changes affect multiple root intents
+  primaryIntentId: string;  // The main intent this question is about
+  generatedAt: number;
 };
 
 export async function POST(request: NextRequest) {
@@ -56,8 +82,9 @@ export async function POST(request: NextRequest) {
       questionType,
       question,
       selectedText,
-      intentContent,
-      allIntents,
+      currentIntentId,      // The intent the writer is currently working on
+      allIntents,           // Full intent hierarchy
+      allWritingBlocks,     // All paragraphs with their linked intents
     } = body;
 
     if (!questionType || !question) {
@@ -71,8 +98,9 @@ export async function POST(request: NextRequest) {
       questionType,
       question,
       selectedText,
-      intentContent,
+      currentIntentId,
       allIntents,
+      allWritingBlocks,
     });
 
     return NextResponse.json(preview);
@@ -89,179 +117,244 @@ async function generateImpactPreview({
   questionType,
   question,
   selectedText,
-  intentContent,
+  currentIntentId,
   allIntents,
+  allWritingBlocks,
 }: {
   questionType: PreviewType;
   question: string;
   selectedText?: string;
-  intentContent?: string;
-  allIntents?: Array<{ id: string; content: string; level: number }>;
-}): Promise<ImpactPreview> {
+  currentIntentId?: string;
+  allIntents?: IntentInfo[];
+  allWritingBlocks?: WritingBlockInfo[];
+}): Promise<ImpactPreviewResponse> {
 
-  // Build intent list for context (excluding current intent)
-  const otherIntents = allIntents
-    ?.filter(i => i.content !== intentContent)
-    .slice(0, 4) // Limit to 4 other sections for preview
-    .map(i => ({ id: i.id, content: i.content })) || [];
+  // Build the full document structure for context
+  // Group intents by their root (level 0) parent
+  const rootIntents = allIntents?.filter(i => i.level === 0) || [];
 
-  const intentListStr = otherIntents
-    .map(i => `- [${i.id}] ${i.content}`)
-    .join("\n");
+  // Build document structure showing intent → paragraph mapping
+  const documentStructure = rootIntents.map(rootIntent => {
+    const childIntents = allIntents?.filter(i => {
+      // Find all children of this root intent
+      let current = i;
+      while (current.parentId) {
+        if (current.parentId === rootIntent.id) return true;
+        current = allIntents?.find(p => p.id === current.parentId) || current;
+        if (!current.parentId && current.id !== rootIntent.id) break;
+      }
+      return i.parentId === rootIntent.id;
+    }) || [];
 
-  switch (questionType) {
-    case "choose-between":
-      return await generateChooseBetweenPreview(question, selectedText, intentContent, otherIntents, intentListStr);
+    const writingBlock = allWritingBlocks?.find(wb => wb.linkedIntentId === rootIntent.id);
 
-    case "add-remove":
-      return await generateAddRemovePreview(question, selectedText, intentContent, otherIntents, intentListStr);
+    return {
+      rootIntent,
+      childIntents,
+      paragraphContent: writingBlock?.content || "(no content yet)",
+      writingBlockId: writingBlock?.id,
+    };
+  });
 
-    case "how-much":
-      return await generateHowMuchPreview(question, selectedText, intentContent, otherIntents, intentListStr);
-
-    default:
-      return {
-        type: questionType,
-        originalText: selectedText || "",
-      };
+  // Find current intent and its root
+  const currentIntent = allIntents?.find(i => i.id === currentIntentId);
+  let currentRootIntent = currentIntent;
+  if (currentIntent && currentIntent.level > 0) {
+    // Find the root parent
+    let parent = allIntents?.find(i => i.id === currentIntent.parentId);
+    while (parent && parent.level > 0) {
+      parent = allIntents?.find(i => i.id === parent?.parentId);
+    }
+    currentRootIntent = parent || currentIntent;
   }
-}
 
-async function generateChooseBetweenPreview(
-  question: string,
-  selectedText?: string,
-  intentContent?: string,
-  otherIntents?: Array<{ id: string; content: string }>,
-  intentListStr?: string
-): Promise<ImpactPreview> {
-  try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: `You help writers preview how their choices affect a collaborative document.
+  const systemPrompt = `You are a team member in a collaborative writing group. Your team has discussed and agreed on an intent structure that guides your collaborative document. Now each member is writing their assigned sections.
 
-Given two options the writer is choosing between, show:
-1. How their section would read with each option
-2. How OTHER team members' sections might be written to align with each choice
+## Your Role
+You are helping a teammate think through a decision. They've written part of their section and are now uncertain about something. You need to show them:
+1. If they KEEP the current approach: How would they continue? How would other teammates' sections stay coherent?
+2. If they MAKE A CHANGE: How would their writing shift? How would teammates need to adjust to maintain coherence?
 
-Be concise - show SHORT representative text snippets (1-2 sentences max per section).
-Focus on showing the DIFFERENCE in how related sections would be written.
+## The Document Structure
+- Each **Level 0 intent** = a section/paragraph assigned to a team member
+- **Level 1+ intents** = sub-points that guide what to cover in that section
+- All sections must work together as a coherent document
 
-Output JSON:
+## Your Task
+A teammate is asking: "{question}"
+
+Think through:
+1. Which intent/section is this question about?
+2. If they keep current approach → their writing continues in direction X, teammates write Y
+3. If they make the change → their writing shifts to direction X', teammates need to adjust to Y'
+4. Would this change ripple to other sections? (If yes → needs team discussion)
+
+## CRITICAL: Write Like a Real Writer
+When generating paragraphPreviews, WRITE AS IF YOU ARE THE ACTUAL WRITER:
+- Use natural academic prose, not descriptions of what would be written
+- Include specific examples, transitions, and argumentation
+- Match the tone and style of existing content
+- Write complete, publication-ready paragraphs
+
+## Output Format (JSON)
 {
+  "primaryIntentId": "the intent ID this question is mainly about",
+  "affectedIntentIds": ["all intent IDs affected - including sub-intents"],
+  "affectedRootIntentIds": ["level-0 intent IDs affected - these are the sections"],
+  "needsTeamDiscussion": true if change affects multiple sections,
+  "reasoning": "Why this does/doesn't need team discussion",
   "optionA": {
-    "label": "2-4 word label",
-    "yourSection": "1-2 sentence preview of your section with option A",
-    "affectedSections": [
+    "label": "Keep Current (brief description)",
+    "isCurrentState": true,
+    "intentChanges": [],
+    "paragraphPreviews": [
       {
-        "intentId": "id from the list",
-        "intentContent": "the intent content",
-        "previewText": "1-2 sentence preview of how this section might be written",
-        "changeType": "modified" or "unchanged"
+        "intentId": "root intent ID (MUST match exactly)",
+        "intentContent": "section's intent",
+        "currentContent": "existing content OR empty string",
+        "previewContent": "REQUIRED! If section has written content: copy that content here. If section is 'Not yet written': GENERATE 2-3 paragraphs showing what teammate WOULD write following the current intent structure.",
+        "changeType": "unchanged",
+        "reason": "Following original intent"
       }
     ]
   },
   "optionB": {
-    "label": "2-4 word label",
-    "yourSection": "1-2 sentence preview of your section with option B",
-    "affectedSections": [same structure]
+    "label": "Make Change (brief description)",
+    "isCurrentState": false,
+    "intentChanges": [
+      {
+        "intentId": "intent ID being modified",
+        "intentContent": "CURRENT intent text (before change)",
+        "previewText": "NEW intent text (after change)",
+        "changeType": "modified"
+      },
+      {
+        "intentId": "new-intent-id",
+        "intentContent": "",
+        "previewText": "Text for the new intent being added",
+        "changeType": "added"
+      },
+      {
+        "intentId": "intent-to-remove",
+        "intentContent": "Intent text that would be removed",
+        "previewText": "",
+        "changeType": "removed"
+      }
+    ],
+    "paragraphPreviews": [
+      {
+        "intentId": "root intent ID for affected section",
+        "intentContent": "section's intent",
+        "currentContent": "existing content OR empty",
+        "previewContent": "WRITE THE ACTUAL PARAGRAPH showing how this section would be written with the new intent structure.",
+        "changeType": "modified",
+        "reason": "How this section's writing changes"
+      }
+    ]
   }
 }
 
-Only include sections that would actually be affected. Mark as "modified" if the text would differ between options, "unchanged" if it stays the same.`
-        },
-        {
-          role: "user",
-          content: `Question: ${question}
+## CRITICAL RULES:
 
-${selectedText ? `Selected text: "${selectedText}"` : ""}
-${intentContent ? `Writer's current section: ${intentContent}` : ""}
+### For intentChanges (Option B):
+- Show ACTUAL changes to intent structure, not descriptions
+- changeType can be: "modified", "added", "removed"
+- For "modified": intentContent = current text, previewText = new text
+- For "added": intentContent = empty, previewText = new intent text
+- For "removed": intentContent = text being removed, previewText = empty
+- Include ALL affected intents (root and sub-intents)
 
-Other sections in document:
-${intentListStr || "None"}
+### For paragraphPreviews (BOTH Options) - REQUIRED FOR ALL AFFECTED SECTIONS:
+- **Option A paragraphPreviews** (REQUIRED - DO NOT SKIP):
+  - Include a paragraphPreview for EVERY section in affectedRootIntentIds
+  - If section has written content: copy that content into previewContent
+  - If section is "Not yet written": GENERATE 2-3 paragraphs showing what teammate WOULD write following CURRENT intent
+  - The intentId MUST match exactly the root intent ID from the document structure
+- **Option B paragraphPreviews** (REQUIRED):
+  - Include a paragraphPreview for EVERY section in affectedRootIntentIds
+  - GENERATE the full paragraph showing how writing would change with MODIFIED intent
+- Write as if you ARE the teammate - real prose, not descriptions
 
-Generate side-by-side preview.`
-        }
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.7,
-    });
+### Example:
+If I ask "Should I add the scenario in my section?":
+- Option A intentChanges: [] (no changes)
+- Option A paragraphPreviews: MUST include previews for ALL affected sections - generate writing for empty sections
+- Option B intentChanges:
+  - {intentId: "section-1", intentContent: "describe problem", previewText: "describe problem using a real scenario", changeType: "modified"}
+  - {intentId: "section-2", intentContent: "introduce scenario", previewText: "", changeType: "removed"} (if scenario moves to section 1)
+- Option B paragraphPreviews: Full paragraphs for all affected sections
 
-    const result = JSON.parse(completion.choices[0].message.content || "{}");
+Only output valid JSON.`;
 
-    return {
-      type: "choose-between",
-      originalText: selectedText || "",
-      optionA: result.optionA,
-      optionB: result.optionB,
-    };
-  } catch (error) {
-    console.error("[Choose Between Preview] Error:", error);
-    return {
-      type: "choose-between",
-      originalText: selectedText || "",
-    };
+  // Build the user prompt with full document context - role-play framing
+  let userPrompt = `## Situation
+I'm a team member working on our collaborative document. We've agreed on the intent structure below.
+
+## My Question
+I've been writing my section and I'm uncertain: "${question}"
+
+`;
+
+  if (selectedText) {
+    userPrompt += `## The Text I'm Uncertain About
+"${selectedText}"
+
+`;
   }
-}
 
-async function generateAddRemovePreview(
-  question: string,
-  selectedText?: string,
-  intentContent?: string,
-  otherIntents?: Array<{ id: string; content: string }>,
-  intentListStr?: string
-): Promise<ImpactPreview> {
+  if (currentRootIntent) {
+    userPrompt += `## My Current Section
+I'm responsible for: [${currentRootIntent.id}] "${currentRootIntent.content}"
+
+`;
+  }
+
+  userPrompt += `## Our Team's Document Structure
+Here's what our team agreed on and what each section currently looks like:
+
+`;
+
+  documentStructure.forEach((section, idx) => {
+    const isCurrent = section.rootIntent.id === currentRootIntent?.id;
+    const hasContent = section.paragraphContent && section.paragraphContent !== "(no content yet)";
+
+    userPrompt += `### Section ${idx + 1}${isCurrent ? ' ← MY SECTION' : ''}\n`;
+    userPrompt += `**Intent:** ${section.rootIntent.content}\n`;
+    userPrompt += `**ID:** ${section.rootIntent.id}\n`;
+
+    if (section.childIntents.length > 0) {
+      userPrompt += `**Sub-points to cover:**\n`;
+      section.childIntents.forEach(child => {
+        userPrompt += `  • ${child.content}\n`;
+      });
+    }
+
+    if (hasContent) {
+      userPrompt += `**Currently written:**\n${section.paragraphContent}\n\n`;
+    } else {
+      userPrompt += `**Status:** Not yet written\n\n`;
+    }
+  });
+
+  userPrompt += `## Help Me Think Through This
+1. What intent is my question really about?
+2. **If I keep current approach (Option A):** How would I continue writing? How do my teammates' sections stay coherent with mine?
+3. **If I make the change (Option B):**
+   - How would MY section's writing change? Write out how I would actually write it.
+   - How would this affect my TEAMMATES' sections? Would they need to adjust?
+4. Does this change ripple beyond my section? If it affects how teammates should write → needs team discussion.
+
+## CRITICAL: Generate paragraphPreviews for BOTH Options
+- **Option A paragraphPreviews**: For ALL affected sections, generate what the writing WOULD look like following the CURRENT intent. If a section already has content, use that content. If a section is empty ("Not yet written"), GENERATE what that teammate would write.
+- **Option B paragraphPreviews**: For ALL affected sections, generate what the writing WOULD look like following the MODIFIED intent.
+- Write as if you ARE the teammate writing that section - real prose, not descriptions.`;
+
   try {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
-        {
-          role: "system",
-          content: `You help writers preview how adding/removing content affects a collaborative document.
-
-Show side-by-side:
-1. How the writer's section reads WITH vs WITHOUT the content
-2. How OTHER sections might be written differently in each case
-
-Be concise - show SHORT text snippets (1-2 sentences max per section).
-
-Output JSON:
-{
-  "withContent": {
-    "label": "Keep/Add",
-    "yourSection": "1-2 sentence preview with content included",
-    "affectedSections": [
-      {
-        "intentId": "id",
-        "intentContent": "the intent",
-        "previewText": "how this section might reference/align with the content",
-        "changeType": "modified" or "unchanged"
-      }
-    ]
-  },
-  "withoutContent": {
-    "label": "Remove/Skip",
-    "yourSection": "1-2 sentence preview without the content",
-    "affectedSections": [same structure]
-  }
-}
-
-Only include sections that would be affected.`
-        },
-        {
-          role: "user",
-          content: `Question: ${question}
-
-${selectedText ? `Context: "${selectedText}"` : ""}
-${intentContent ? `Writer's section: ${intentContent}` : ""}
-
-Other sections:
-${intentListStr || "None"}
-
-Generate with/without preview.`
-        }
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
       ],
       response_format: { type: "json_object" },
       temperature: 0.7,
@@ -269,95 +362,46 @@ Generate with/without preview.`
 
     const result = JSON.parse(completion.choices[0].message.content || "{}");
 
-    return {
-      type: "add-remove",
-      originalText: selectedText || "",
-      withContent: result.withContent,
-      withoutContent: result.withoutContent,
-    };
-  } catch (error) {
-    console.error("[Add Remove Preview] Error:", error);
-    return {
-      type: "add-remove",
-      originalText: selectedText || "",
-    };
-  }
-}
+    // Calculate affected root intents if not provided
+    const affectedRootIntentIds = result.affectedRootIntentIds ||
+      (result.affectedIntentIds || []).filter((id: string) => {
+        const intent = allIntents?.find(i => i.id === id);
+        return intent && intent.level === 0;
+      });
 
-async function generateHowMuchPreview(
-  question: string,
-  selectedText?: string,
-  intentContent?: string,
-  otherIntents?: Array<{ id: string; content: string }>,
-  intentListStr?: string
-): Promise<ImpactPreview> {
-  try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: `You help writers preview how detail level affects a collaborative document.
+    // Determine if team discussion is needed (affects multiple root intents)
+    const needsTeamDiscussion = result.needsTeamDiscussion ?? (affectedRootIntentIds.length > 1);
 
-Show side-by-side:
-1. Brief vs detailed version of the writer's section
-2. How OTHER sections might adjust their detail level to match
-
-Be concise - show SHORT text snippets (1-2 sentences max per section).
-
-Output JSON:
-{
-  "briefVersion": {
-    "label": "Brief",
-    "yourSection": "1-2 sentence concise version",
-    "affectedSections": [
-      {
-        "intentId": "id",
-        "intentContent": "the intent",
-        "previewText": "brief version of this related section",
-        "changeType": "modified" or "unchanged"
-      }
-    ]
-  },
-  "detailedVersion": {
-    "label": "Detailed",
-    "yourSection": "2-3 sentence expanded version",
-    "affectedSections": [same structure with more detail]
-  }
-}
-
-Only include sections that would adjust their detail level.`
-        },
-        {
-          role: "user",
-          content: `Question: ${question}
-
-${selectedText ? `Current text: "${selectedText}"` : ""}
-${intentContent ? `Writer's section: ${intentContent}` : ""}
-
-Other sections:
-${intentListStr || "None"}
-
-Generate brief/detailed preview.`
-        }
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.7,
+    console.log("[Generate Impact Preview] Result:", {
+      primaryIntentId: result.primaryIntentId,
+      affectedRootIntentIds,
+      needsTeamDiscussion,
+      reasoning: result.reasoning,
+      optionA_paragraphPreviews: result.optionA?.paragraphPreviews,
+      optionB_paragraphPreviews: result.optionB?.paragraphPreviews,
     });
 
-    const result = JSON.parse(completion.choices[0].message.content || "{}");
-
     return {
-      type: "how-much",
-      originalText: selectedText || "",
-      briefVersion: result.briefVersion,
-      detailedVersion: result.detailedVersion,
+      questionType,
+      optionA: result.optionA || { label: "Keep Current", intentChanges: [], paragraphPreviews: [] },
+      optionB: result.optionB || { label: "Make Change", intentChanges: [], paragraphPreviews: [] },
+      affectedIntentIds: result.affectedIntentIds || [],
+      affectedRootIntentIds,
+      needsTeamDiscussion,
+      primaryIntentId: result.primaryIntentId || currentIntentId || "",
+      generatedAt: Date.now(),
     };
   } catch (error) {
-    console.error("[How Much Preview] Error:", error);
+    console.error("[Generate Impact Preview] Error:", error);
     return {
-      type: "how-much",
-      originalText: selectedText || "",
+      questionType,
+      optionA: { label: "Keep Current", intentChanges: [], paragraphPreviews: [] },
+      optionB: { label: "Make Change", intentChanges: [], paragraphPreviews: [] },
+      affectedIntentIds: [],
+      affectedRootIntentIds: [],
+      needsTeamDiscussion: false,
+      primaryIntentId: currentIntentId || "",
+      generatedAt: Date.now(),
     };
   }
 }
