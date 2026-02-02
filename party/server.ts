@@ -53,10 +53,34 @@ export type RuleBlock = {
   position: number;
 };
 
+export type HelpRequest = {
+  id: string;
+  createdBy: string;
+  createdByName?: string;
+  createdByEmail?: string;
+  createdAt: number;
+  question: string;
+  tags?: string[];
+  writingBlockId: string;
+  intentBlockId?: string;
+  selectedText?: string;
+  selectionRange?: {
+    from: number;
+    to: number;
+  };
+  aiJudgment?: {
+    isTeamRelevant: boolean;
+    affectedIntents?: string[];
+    reason: string;
+  };
+  status: 'pending' | 'ai_processing' | 'personal' | 'team' | 'resolved';
+};
+
 export type RoomState = {
   writingBlocks: WritingBlock[];
   intentBlocks: IntentBlock[];
   ruleBlocks: RuleBlock[];
+  helpRequests: HelpRequest[];
 };
 
 type OnlineUser = {
@@ -94,11 +118,22 @@ export default class WritingRoomServer implements Party.Server {
         writingBlocks: [],
         intentBlocks: [],
         ruleBlocks: [],
+        helpRequests: [],
       });
-    } else if (!state.ruleBlocks) {
-      // Migration: add ruleBlocks to existing state
-      state.ruleBlocks = [];
-      await this.room.storage.put("state", state);
+    } else {
+      // Migration: add missing arrays to existing state
+      let needsUpdate = false;
+      if (!state.ruleBlocks) {
+        state.ruleBlocks = [];
+        needsUpdate = true;
+      }
+      if (!state.helpRequests) {
+        state.helpRequests = [];
+        needsUpdate = true;
+      }
+      if (needsUpdate) {
+        await this.room.storage.put("state", state);
+      }
     }
   }
 
@@ -122,17 +157,6 @@ export default class WritingRoomServer implements Party.Server {
     // Send current state to the newly connected client
     const state = await this.room.storage.get<RoomState>("state");
 
-    console.log('[Server] onConnect - Sending sync to new client:', {
-      writingBlocksCount: state?.writingBlocks?.length || 0,
-      writingBlocksWithAlignment: state?.writingBlocks?.filter(wb => wb.alignmentResult).length || 0,
-      writingBlockDetails: state?.writingBlocks?.map(wb => ({
-        id: wb.id.substring(0, 20),
-        linkedIntentId: wb.linkedIntentId?.substring(0, 20),
-        hasAlignmentResult: !!wb.alignmentResult,
-        alignmentResultKeys: wb.alignmentResult ? Object.keys(wb.alignmentResult) : []
-      })) || []
-    });
-
     conn.send(
       JSON.stringify({
         type: "sync",
@@ -140,6 +164,7 @@ export default class WritingRoomServer implements Party.Server {
           writingBlocks: [],
           intentBlocks: [],
           ruleBlocks: [],
+          helpRequests: [],
         },
       })
     );
@@ -187,6 +212,7 @@ export default class WritingRoomServer implements Party.Server {
         if (!state) return;
 
         const index = state.intentBlocks.findIndex((b) => b.id === data.blockId);
+
         if (index !== -1) {
           state.intentBlocks[index] = {
             ...state.intentBlocks[index],
@@ -247,34 +273,17 @@ export default class WritingRoomServer implements Party.Server {
       }
 
       case "update_writing_block": {
-        console.log('[Server] update_writing_block:', {
-          blockId: data.blockId,
-          updates: data.updates,
-          hasAlignmentResult: !!data.updates.alignmentResult,
-          alignmentResultKeys: data.updates.alignmentResult ? Object.keys(data.updates.alignmentResult) : []
-        });
-
         const state = await this.room.storage.get<RoomState>("state");
-        if (!state) {
-          console.log('[Server] No state found');
-          return;
-        }
+        if (!state) return;
 
         const index = state.writingBlocks.findIndex((b) => b.id === data.blockId);
-        console.log('[Server] Found block at index:', index);
 
         if (index !== -1) {
-          const oldBlock = state.writingBlocks[index];
           state.writingBlocks[index] = {
-            ...oldBlock,
+            ...state.writingBlocks[index],
             ...data.updates,
             updatedAt: Date.now(),
           };
-          console.log('[Server] Updated block:', {
-            blockId: data.blockId,
-            hadAlignmentResult: !!oldBlock.alignmentResult,
-            hasAlignmentResultNow: !!state.writingBlocks[index].alignmentResult
-          });
         }
 
         await this.room.storage.put("state", state);
@@ -319,6 +328,48 @@ export default class WritingRoomServer implements Party.Server {
         state.ruleBlocks = state.ruleBlocks || [];
         state.ruleBlocks = state.ruleBlocks.filter(
           (b) => b.id !== data.blockId
+        );
+        await this.room.storage.put("state", state);
+        this.room.broadcast(message, [sender.id]);
+        break;
+      }
+
+      case "add_help_request": {
+        const state = await this.room.storage.get<RoomState>("state");
+        if (!state) return;
+
+        state.helpRequests = state.helpRequests || [];
+        state.helpRequests.push(data.request);
+        await this.room.storage.put("state", state);
+        this.room.broadcast(message, [sender.id]);
+        break;
+      }
+
+      case "update_help_request": {
+        const state = await this.room.storage.get<RoomState>("state");
+        if (!state) return;
+
+        state.helpRequests = state.helpRequests || [];
+        const index = state.helpRequests.findIndex((r) => r.id === data.requestId);
+        if (index !== -1) {
+          state.helpRequests[index] = {
+            ...state.helpRequests[index],
+            ...data.updates,
+          };
+        }
+
+        await this.room.storage.put("state", state);
+        this.room.broadcast(message, [sender.id]);
+        break;
+      }
+
+      case "delete_help_request": {
+        const state = await this.room.storage.get<RoomState>("state");
+        if (!state) return;
+
+        state.helpRequests = state.helpRequests || [];
+        state.helpRequests = state.helpRequests.filter(
+          (r) => r.id !== data.requestId
         );
         await this.room.storage.put("state", state);
         this.room.broadcast(message, [sender.id]);

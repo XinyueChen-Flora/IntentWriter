@@ -46,6 +46,7 @@ type IntentPanelProps = {
   importMarkdown?: (markdown: string) => void;
   currentUser: User;
   alignmentResults?: Map<string, AlignmentResult>;
+  localSuggestedIntents?: Map<string, AlignmentResult>; // Local-only suggested intents (not synced)
   hoveredIntentId?: string | null;
   onHoverIntent?: (intentId: string | null) => void;
   activeIntentId?: string | null; // Currently editing intent
@@ -153,6 +154,7 @@ export default function IntentPanel({
   importMarkdown,
   currentUser,
   alignmentResults,
+  localSuggestedIntents,
   hoveredIntentId,
   onHoverIntent,
   activeIntentId,
@@ -177,15 +179,9 @@ export default function IntentPanel({
   const hierarchy = useIntentHierarchy({
     blocks,
     alignmentResults,
+    localSuggestedIntents,
     acceptedSuggestions: suggestions.acceptedSuggestions,
   });
-
-  // Debug: log when blocks change
-  useEffect(() => {
-    console.log('[IntentPanel] blocks updated, count:', blocks.length, 'rootBlocks:', hierarchy.rootBlocks.length);
-    const rootBlockPositions = hierarchy.rootBlocks.map(b => ({ id: b.id, content: b.content.substring(0, 20), position: b.position }));
-    console.log('[IntentPanel] Root block positions:', rootBlockPositions);
-  }, [blocks, hierarchy.rootBlocks]);
 
   // Simple add block handler
   const handleAddBlock = () => {

@@ -59,10 +59,43 @@ export type RuleBlock = {
   sourceRubric?: string; // Original rubric text that generated this rule (optional)
 };
 
+// Help Request - for writer to articulate uncertainty/questions during writing
+export type HelpRequest = {
+  id: string;
+  createdBy: string;
+  createdByName?: string;
+  createdByEmail?: string;
+  createdAt: number;
+
+  // The question/uncertainty
+  question: string;
+  tags?: string[]; // Optional tags: "不确定", "需决策", "需信息", "需确认"
+
+  // Context - where this was raised
+  writingBlockId: string;
+  intentBlockId?: string; // Auto-linked via alignment
+  selectedText?: string;
+  selectionRange?: {
+    from: number;
+    to: number;
+  };
+
+  // AI judgment result
+  aiJudgment?: {
+    isTeamRelevant: boolean;
+    affectedIntents?: string[]; // Intent IDs that may be affected
+    reason: string;
+  };
+
+  // Status flow: pending -> ai_processing -> personal/team -> resolved
+  status: 'pending' | 'ai_processing' | 'personal' | 'team' | 'resolved';
+};
+
 export type RoomState = {
   writingBlocks: WritingBlock[];
   intentBlocks: IntentBlock[];
   ruleBlocks: RuleBlock[];
+  helpRequests: HelpRequest[];
 };
 
 export type OnlineUser = {
@@ -80,6 +113,7 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
     writingBlocks: [],
     intentBlocks: [],
     ruleBlocks: [],
+    helpRequests: [],
   });
   const [isConnected, setIsConnected] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
@@ -89,11 +123,6 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
     party: "main",
     room: roomId,
     onOpen() {
-      console.log(`[PartyKit Client] ========== CONNECTION OPENED ==========`);
-      console.log(`[PartyKit Client] Connected to room: ${roomId}`);
-      console.log(`[PartyKit Client] User ID: ${user?.id}`);
-      console.log(`[PartyKit Client] Connection time: ${new Date().toISOString()}`);
-      console.log(`[PartyKit Client] =========================================`);
       setIsConnected(true);
 
       // Send user identification to server
@@ -112,7 +141,6 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
       }
     },
     onClose() {
-      console.log(`[PartyKit Client] Disconnected from room: ${roomId}`);
       setIsConnected(false);
     },
     onMessage(event: MessageEvent) {
@@ -123,26 +151,8 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
 
       const data = JSON.parse(event.data as string);
 
-      console.log(`[PartyKit Client] Received message:`, data.type, data.type === 'sync' ? {
-        intentBlocks: data.state?.intentBlocks?.length || 0,
-        writingBlocks: data.state?.writingBlocks?.length || 0,
-        ruleBlocks: data.state?.ruleBlocks?.length || 0,
-      } : '', `at ${new Date().toISOString()}`);
-
       switch (data.type) {
         case "sync":
-          console.log(`[PartyKit Client] ========== SYNC MESSAGE RECEIVED ==========`);
-          console.log(`[PartyKit Client] Setting state from sync:`, {
-            intentBlocks: data.state?.intentBlocks?.length || 0,
-            writingBlocks: data.state?.writingBlocks?.length || 0,
-            writingBlocksWithAlignment: data.state?.writingBlocks?.filter((wb: any) => wb.alignmentResult).length || 0,
-            writingBlockDetails: data.state?.writingBlocks?.map((wb: any) => ({
-              id: wb.id.substring(0, 20),
-              linkedIntentId: wb.linkedIntentId?.substring(0, 20),
-              hasAlignment: !!wb.alignmentResult
-            }))
-          });
-          console.log(`[PartyKit Client] ==========================================`);
           setState(data.state);
           break;
         case "online_users":
@@ -185,37 +195,14 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
           }));
           break;
         case "update_writing_block":
-          console.log('[PartyKit Client] Received update_writing_block broadcast:', {
-            blockId: data.blockId,
-            hasAlignmentResult: !!data.updates.alignmentResult,
-            alignmentResultKeys: data.updates.alignmentResult ? Object.keys(data.updates.alignmentResult) : [],
-            timestamp: new Date().toISOString()
-          });
           setState((prev) => {
             const index = prev.writingBlocks.findIndex((b) => b.id === data.blockId);
-            if (index === -1) {
-              console.log('[PartyKit Client] ✗ Block not found in broadcast update:', data.blockId);
-              console.log('[PartyKit Client] Available blocks:', prev.writingBlocks.map(b => ({
-                id: b.id,
-                linkedIntentId: b.linkedIntentId
-              })));
-              return prev;
-            }
-            const oldBlock = prev.writingBlocks[index];
+            if (index === -1) return prev;
             const newBlocks = [...prev.writingBlocks];
             newBlocks[index] = {
               ...newBlocks[index],
               ...data.updates,
             };
-            console.log('[PartyKit Client] ✓ Broadcast update applied:', {
-              blockId: data.blockId,
-              index,
-              linkedIntentId: newBlocks[index].linkedIntentId,
-              hadAlignmentResult: !!oldBlock.alignmentResult,
-              hasAlignmentResultNow: !!newBlocks[index].alignmentResult,
-              totalBlocksInState: prev.writingBlocks.length,
-              timestamp: new Date().toISOString()
-            });
             return { ...prev, writingBlocks: newBlocks };
           });
           break;
@@ -243,6 +230,30 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
             ruleBlocks: prev.ruleBlocks.filter((b) => b.id !== data.blockId),
           }));
           break;
+        case "add_help_request":
+          setState((prev) => ({
+            ...prev,
+            helpRequests: [...prev.helpRequests, data.request],
+          }));
+          break;
+        case "update_help_request":
+          setState((prev) => {
+            const index = prev.helpRequests.findIndex((r) => r.id === data.requestId);
+            if (index === -1) return prev;
+            const newRequests = [...prev.helpRequests];
+            newRequests[index] = {
+              ...newRequests[index],
+              ...data.updates,
+            };
+            return { ...prev, helpRequests: newRequests };
+          });
+          break;
+        case "delete_help_request":
+          setState((prev) => ({
+            ...prev,
+            helpRequests: prev.helpRequests.filter((r) => r.id !== data.requestId),
+          }));
+          break;
       }
     },
   });
@@ -251,6 +262,7 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
   const updateIntentBlock = useCallback(
     (blockId: string, updates: Partial<IntentBlock>) => {
       if (!socket) return;
+
       socket.send(
         JSON.stringify({
           type: "update_intent_block",
@@ -258,6 +270,7 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
           updates,
         })
       );
+
       // Optimistic update
       setState((prev) => {
         const index = prev.intentBlocks.findIndex((b) => b.id === blockId);
@@ -349,13 +362,6 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
     (blockId: string, updates: Partial<WritingBlock>) => {
       if (!socket) return;
 
-      console.log('[PartyKit Client] updateWritingBlock called:', {
-        blockId: blockId.substring(0, 20),
-        hasAlignmentResult: !!updates.alignmentResult,
-        alignmentResultKeys: updates.alignmentResult ? Object.keys(updates.alignmentResult) : [],
-        updateKeys: Object.keys(updates)
-      });
-
       socket.send(
         JSON.stringify({
           type: "update_writing_block",
@@ -367,20 +373,12 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
       // Optimistic update
       setState((prev) => {
         const index = prev.writingBlocks.findIndex((b) => b.id === blockId);
-        if (index === -1) {
-          console.log('[PartyKit Client] ✗ Block not found for optimistic update:', blockId.substring(0, 20));
-          return prev;
-        }
+        if (index === -1) return prev;
         const newBlocks = [...prev.writingBlocks];
         newBlocks[index] = {
           ...newBlocks[index],
           ...updates,
         };
-        console.log('[PartyKit Client] ✓ Optimistic update applied:', {
-          blockId: blockId.substring(0, 20),
-          hadAlignmentResult: !!prev.writingBlocks[index].alignmentResult,
-          hasAlignmentResultNow: !!newBlocks[index].alignmentResult
-        });
         return { ...prev, writingBlocks: newBlocks };
       });
     },
@@ -448,6 +446,67 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
     [socket]
   );
 
+  const addHelpRequest = useCallback(
+    (request: HelpRequest) => {
+      if (!socket) return;
+      socket.send(
+        JSON.stringify({
+          type: "add_help_request",
+          request,
+        })
+      );
+      // Optimistic update
+      setState((prev) => ({
+        ...prev,
+        helpRequests: [...prev.helpRequests, request],
+      }));
+    },
+    [socket]
+  );
+
+  const updateHelpRequest = useCallback(
+    (requestId: string, updates: Partial<HelpRequest>) => {
+      if (!socket) return;
+      socket.send(
+        JSON.stringify({
+          type: "update_help_request",
+          requestId,
+          updates,
+        })
+      );
+      // Optimistic update
+      setState((prev) => {
+        const index = prev.helpRequests.findIndex((r) => r.id === requestId);
+        if (index === -1) return prev;
+        const newRequests = [...prev.helpRequests];
+        newRequests[index] = {
+          ...newRequests[index],
+          ...updates,
+        };
+        return { ...prev, helpRequests: newRequests };
+      });
+    },
+    [socket]
+  );
+
+  const deleteHelpRequest = useCallback(
+    (requestId: string) => {
+      if (!socket) return;
+      socket.send(
+        JSON.stringify({
+          type: "delete_help_request",
+          requestId,
+        })
+      );
+      // Optimistic update
+      setState((prev) => ({
+        ...prev,
+        helpRequests: prev.helpRequests.filter((r) => r.id !== requestId),
+      }));
+    },
+    [socket]
+  );
+
   return {
     state,
     isConnected,
@@ -461,5 +520,8 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
     addRuleBlock,
     updateRuleBlock,
     deleteRuleBlock,
+    addHelpRequest,
+    updateHelpRequest,
+    deleteHelpRequest,
   };
 }

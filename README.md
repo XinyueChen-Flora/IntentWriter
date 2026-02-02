@@ -1,34 +1,182 @@
-# Intent Writer
+# IntentWriter
 
-A real-time collaborative writing platform with intent alignment awareness. Features dual-panel editing with writing blocks on the left and intent blocks on the right, enabling structured collaborative writing with explicit intent tracking.
+A real-time collaborative writing platform with AI-powered intent alignment analysis. IntentWriter helps teams maintain alignment between written content and stated intentions through a dual-panel interface, hierarchical intent structures, and intelligent coverage tracking.
+
+## Core Concept
+
+IntentWriter addresses the challenge of **intent-driven collaborative writing**:
+- Teams often have writing goals/intents but diverge during execution
+- No clear mechanism to link written content back to stated intentions
+- Difficult to track which intentions are covered, partially addressed, or missing
+
+The solution provides:
+- **Dual-panel interface**: Writing blocks (left) linked to intent blocks (right)
+- **AI-powered alignment analysis**: Real-time feedback on coverage status
+- **Hierarchical intent management**: Nested intent structures with parent-child relationships
+- **Shared writing rules**: Collaborative rubric management
+- **Real-time collaboration**: Conflict-free synchronization across users
 
 ## Features
 
-- **Real-time Collaboration**: Multiple users can edit simultaneously with instant synchronization
-- **Dual-Panel Interface**:
-  - Left panel: Writing editor with rich text blocks
-  - Right panel: Intent panel for tracking writing goals and objectives
-- **Block Linking**: Link writing blocks to intent blocks for better alignment
-- **User Authentication**: Secure registration and login with Supabase
-- **Document Management**: Create, view, and delete collaborative documents
-- **Conflict-free Sync**: Powered by PartyKit + Yjs CRDT technology
-- **AI-Powered Alignment**: OpenAI GPT-4 analyzes writing-intent alignment
+### Dual-Panel Editor Interface
+
+**Left Panel - Writing Editor**
+- BlockNote-based rich text editor for each writing block
+- Multiple independent writing blocks that can be created/edited/deleted
+- Real-time collaboration via Yjs CRDT
+- Visual highlighting showing alignment status with intent blocks
+- Each writing block can be linked to a specific intent block
+
+**Right Panel - Intent Panel**
+- Hierarchical intent structure with unlimited nesting levels
+- Indent/outdent operations to manage hierarchy
+- Drag-and-drop reordering
+- Collapse/expand tree nodes
+- Visual coverage indicators:
+  - `covered` - fully addressed in writing
+  - `partial` - some aspects addressed
+  - `misaligned` - addressed but incorrectly
+  - `missing-skipped` - skipped when later intents have content
+  - `missing-not-started` - not yet addressed
+  - `extra` - AI-suggested intent for content not in outline
+
+### AI-Powered Alignment Analysis
+
+- **GPT-4o Integration** - Analyzes writing against intent structure
+- **Detailed Output**:
+  - Overall alignment score (0-100)
+  - Per-intent coverage status
+  - Writing segments mapped to specific intents
+  - Identified covered/missing/extra aspects
+  - Suggestions for improvement
+  - Order mismatch detection
+- **Suggested Intents** - AI proposes new intents for content not in the outline
+- **Real-time Feedback** - Analysis updates as writing changes
+
+### Hierarchical Intent Management
+
+- Unlimited nesting with parent-child relationships
+- Position tracking (level 0=root, 1=child, 2=grandchild, etc.)
+- Intent tags for metadata/classifications
+- Assignment system for team member responsibility
+- Collapsible tree navigation
+
+### Shared Writing Rules/Rubrics
+
+- Create writing rules with description, rationale, and examples
+- Track editing history with version tracing
+- AAC&U Framework integration for academic writing rubrics:
+  - Context & Purpose
+  - Content Development
+  - Genre Conventions
+  - Sources & Evidence
+  - Syntax & Mechanics
+- Rubric upload and parsing
+
+### Real-time Collaboration
+
+- Online user tracking with presence indicators
+- Conflict-free synchronization via Yjs CRDT
+- WebSocket communication through PartyKit
+- User identification with names and avatars
+- Automatic backup to dual storage (PartyKit + Supabase)
+
+### Document Management
+
+- Create, view, and delete documents from dashboard
+- Share document links with collaborators
+- Track document ownership and collaboration access
+- Sort by last updated
+
+### Data Import/Export
+
+- Markdown import to convert outline format into intent hierarchy
+- Supports:
+  - Markdown headings (# to ######)
+  - Numbered lists (1. Item)
+  - Bullet lists (* or - Item)
+  - Indentation for hierarchy
+  - Intent tags ([intent]: metadata)
 
 ## Tech Stack
 
-- **Frontend**: Next.js 15, React 19, TypeScript, Tailwind CSS
-- **Real-time Sync**: PartyKit (WebSocket) + Yjs (CRDT for rich text)
-- **Rich Text Editor**: BlockNote with collaborative editing
-- **Authentication & Database**: Supabase
-- **AI Analysis**: OpenAI GPT-4o-mini
-- **Deployment**: Vercel (Next.js) + PartyKit Cloud
+| Category | Technologies |
+|----------|-------------|
+| **Frontend** | Next.js 15, React 19, TypeScript, Tailwind CSS |
+| **Rich Text Editor** | BlockNote 0.41.1 with collaborative editing |
+| **Real-time Sync** | PartyKit 0.0.115 (WebSocket) + Yjs 13.6.27 (CRDT) |
+| **UI Components** | Radix UI primitives, Lucide Icons |
+| **Drag & Drop** | dnd-kit |
+| **Authentication & Database** | Supabase (PostgreSQL, Auth, Storage) |
+| **AI Analysis** | OpenAI GPT-4o |
+| **Markdown** | react-markdown, remark-gfm |
+
+## Project Structure
+
+```
+IntentWriter/
+├── app/
+│   ├── page.tsx                 # Home page (login/register landing)
+│   ├── layout.tsx               # Root layout
+│   ├── globals.css              # Global styles
+│   ├── auth/
+│   │   ├── login/page.tsx       # Login page
+│   │   ├── register/page.tsx    # Registration page
+│   │   └── callback/route.ts    # OAuth callback handler
+│   ├── dashboard/
+│   │   ├── page.tsx             # Dashboard (server component)
+│   │   └── DashboardClient.tsx  # Dashboard UI (client component)
+│   ├── room/[id]/
+│   │   ├── page.tsx             # Room page with auth check
+│   │   └── Room.tsx             # Room wrapper with Suspense
+│   └── api/
+│       ├── check-alignment/route.ts     # AI alignment analysis
+│       ├── backup-document/route.ts     # Backup to Supabase
+│       ├── restore-document/route.ts    # Restore from backup
+│       └── analyze-rubric/route.ts      # Rubric parsing
+├── components/
+│   ├── editor/
+│   │   ├── CollaborativeEditor.tsx      # Main orchestrator (~900 lines)
+│   │   ├── WritingEditor.tsx            # BlockNote editors & alignment UI (~1400 lines)
+│   │   └── ImportMarkdownDialog.tsx     # Markdown import dialog
+│   ├── intent/
+│   │   ├── IntentPanel.tsx              # Intent hierarchy display (~1200 lines)
+│   │   ├── SharedRulesPanel.tsx         # Shared writing rules management
+│   │   └── hooks/
+│   │       ├── useIntentHierarchy.ts    # Tree structure & navigation
+│   │       ├── useIntentDragDrop.ts     # Drag-and-drop logic
+│   │       ├── useIntentCoverage.ts     # Coverage status management
+│   │       └── useIntentSuggestions.ts  # AI suggestion handling
+│   ├── user/
+│   │   └── UserAvatar.tsx               # User profile avatar
+│   ├── common/
+│   │   └── LinkifyWarningSuppress.tsx   # Warning suppression utility
+│   └── ui/                              # Radix UI components
+│       ├── button.tsx, input.tsx, card.tsx, dialog.tsx, etc.
+├── lib/
+│   ├── partykit.ts                      # PartyKit client hook (useRoom)
+│   ├── aacuFramework.ts                 # AAC&U Writing rubrics framework
+│   ├── markdownParser.ts                # Markdown to intent hierarchy parser
+│   ├── utils.ts                         # Utility functions
+│   └── supabase/
+│       ├── client.ts                    # Client-side Supabase instance
+│       ├── server.ts                    # Server-side Supabase instance
+│       └── middleware.ts                # Auth middleware
+├── party/
+│   └── server.ts                        # PartyKit WebSocket server
+├── supabase/
+│   └── schema.sql                       # Database schema
+├── middleware.ts                        # Next.js auth middleware
+├── partykit.json                        # PartyKit configuration
+└── package.json                         # Dependencies
+```
 
 ## Prerequisites
 
 - Node.js 18+ and npm
-- A Supabase account (free tier available)
-- A PartyKit account (free tier available)
-- OpenAI API key (optional, for alignment analysis)
+- Supabase account (free tier available)
+- PartyKit account (free tier available)
+- OpenAI API key (for alignment analysis)
 
 ## Setup Instructions
 
@@ -61,11 +209,9 @@ NEXT_PUBLIC_PARTYKIT_HOST=localhost:1999
 NEXT_PUBLIC_SUPABASE_URL=https://xxxxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=xxxxx
 
-# OpenAI (optional - for alignment analysis)
+# OpenAI (for alignment analysis)
 OPENAI_API_KEY=sk-xxxxx
 ```
-
-Replace the `xxxxx` values with your actual keys from step 2.
 
 ### 4. Run the Development Server
 
@@ -101,74 +247,51 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 1. After logging in, you'll see the dashboard
 2. Enter a document title in the "Create New Document" form
 3. Click "Create"
-4. You'll be automatically redirected to the collaborative editor
+4. You'll be redirected to the collaborative editor
 
 ### Using the Editor
 
-**Writing Blocks (Left Panel)**:
+**Writing Blocks (Left Panel)**
 - Click "+ Add Writing Block" to create a new writing space
-- Type your content in the textarea
-- Click "🔗 Link" to connect the writing block to an intent block
-- Click "Delete" to remove a block
+- Use the rich text editor to format your content
+- Click "Link" to connect the writing block to an intent block
+- Visual indicators show alignment status with linked intents
 
-**Intent Blocks (Right Panel)**:
-- Click "+ Add Intent" to create a new intent block
-- Describe your writing goal or objective
-- See which writing blocks are linked to each intent
-- Linked blocks show the number of connections
+**Intent Blocks (Right Panel)**
+- Click "+ Add Intent" to create a new intent
+- Use Tab/Shift+Tab or indent buttons to create hierarchy
+- Drag and drop to reorder intents
+- Click the expand/collapse icons to navigate the tree
+- Coverage status shows alignment with writing content
 
-**Collaboration**:
+**AI Alignment Analysis**
+- Click "Check Alignment" to trigger AI analysis
+- View overall score and per-intent coverage status
+- Review AI suggestions for additional intents
+- Accept or reject suggested intents
+
+**Shared Rules**
+- Open the Rules panel to view/add writing rules
+- Each rule includes description, rationale, and examples
+- Rules are shared across all collaborators
+
+**Collaboration**
 - Share the room URL with collaborators
 - All changes sync in real-time
-- Each user sees updates instantly
+- Online users are displayed in the header
 
-### Linking Blocks
+## API Endpoints
 
-1. Create both a writing block and an intent block
-2. In the writing block, click "🔗 Link"
-3. Select the intent block from the dropdown
-4. The blocks are now connected
-5. The intent block shows all linked writing blocks
-
-## Project Structure
-
-```
-IntentWriter/
-├── app/
-│   ├── auth/
-│   │   ├── login/         # Login page
-│   │   └── register/      # Registration page
-│   ├── dashboard/         # Document list and management
-│   ├── room/[id]/         # Collaborative editing room
-│   ├── api/
-│   │   ├── check-alignment/    # AI alignment analysis
-│   │   ├── backup-document/    # Supabase backup
-│   │   └── restore-document/   # Restore from backup
-│   ├── layout.tsx         # Root layout
-│   └── page.tsx           # Home page
-├── components/
-│   ├── CollaborativeEditor.tsx  # Main editor orchestrator
-│   ├── WritingEditor.tsx        # Left panel: BlockNote editors
-│   ├── IntentPanel.tsx          # Right panel: intent hierarchy
-│   └── SharedRulesPanel.tsx     # Shared writing rules
-├── party/
-│   └── server.ts          # PartyKit WebSocket server
-├── lib/
-│   ├── partykit.ts        # PartyKit client hooks
-│   ├── markdownParser.ts  # Markdown import utility
-│   └── supabase/          # Supabase client utilities
-├── supabase/
-│   ├── schema.sql         # Database schema
-│   └── migrations/        # Database migrations
-├── partykit.json          # PartyKit configuration
-└── middleware.ts          # Auth middleware
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/check-alignment` | POST | AI-powered alignment analysis |
+| `/api/backup-document` | POST | Save state to Supabase |
+| `/api/restore-document` | POST | Restore from backup |
+| `/api/analyze-rubric` | POST | Parse rubric text into rules |
 
 ## Deployment
 
 ### 1. Deploy PartyKit Server
-
-First, deploy your PartyKit server:
 
 ```bash
 npm run partykit:deploy
@@ -187,30 +310,9 @@ You'll get a URL like: `https://intent-writer.your-username.partykit.dev`
    NEXT_PUBLIC_SUPABASE_ANON_KEY=xxxxx
    OPENAI_API_KEY=sk-xxxxx
    ```
-4. Deploy!
+4. Deploy
 
-### Important Notes
-
-- **Do not** include `https://` in `NEXT_PUBLIC_PARTYKIT_HOST`
-- PartyKit handles WebSocket connections and data persistence
-- Supabase provides backup storage and authentication
-- See `DEPLOYMENT.md` for detailed deployment guide
-
-## Key Features Implemented
-
-- ✅ **Hierarchical Intent Structure**: Nested intents with indent/outdent controls
-- ✅ **AI Alignment Analysis**: GPT-4 analyzes writing-intent alignment in real-time
-- ✅ **Markdown Import**: Bulk import intent structures from markdown
-- ✅ **Shared Writing Rules**: Collaborative rule management with version history
-- ✅ **Assignment System**: Assign intents to specific team members
-- ✅ **Auto-backup**: Dual storage (PartyKit + Supabase) for reliability
-
-## Future Enhancements
-
-- **Export**: PDF, Word, Markdown export options
-- **Version History**: Browse and restore previous document versions
-- **Comments & Mentions**: In-editor collaboration tools
-- **Intent Templates**: Pre-built intent structures for common writing tasks
+**Important**: Do not include `https://` in `NEXT_PUBLIC_PARTYKIT_HOST`
 
 ## Troubleshooting
 
@@ -218,7 +320,7 @@ You'll get a URL like: `https://intent-writer.your-username.partykit.dev`
 Run `npm install` again to ensure all dependencies are installed.
 
 ### Database errors
-Make sure you've run the SQL schema and migrations in your Supabase dashboard.
+Make sure you've run the SQL schema in your Supabase dashboard.
 
 ### Real-time sync not working
 1. Verify PartyKit server is running (`npm run partykit`)
@@ -234,10 +336,6 @@ Check that your Supabase URL and anon key are correct.
 
 ### AI alignment not working
 Verify your OpenAI API key is set in `.env.local` or Vercel environment variables.
-
-## Contributing
-
-This is an open-source project. Feel free to submit issues and enhancement requests!
 
 ## License
 

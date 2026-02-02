@@ -1,11 +1,11 @@
 "use client";
 
 import { useMemo, useEffect, useState, useCallback, useRef } from "react";
-import type { WritingBlock, IntentBlock } from "@/lib/partykit";
+import type { WritingBlock, IntentBlock, HelpRequest } from "@/lib/partykit";
 import type { User } from "@supabase/supabase-js";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Lightbulb, AlertCircle, RefreshCw } from "lucide-react";
+import { Lightbulb, AlertCircle, RefreshCw, HelpCircle } from "lucide-react";
 import { BlockNoteView } from "@blocknote/mantine";
 import { useCreateBlockNote } from "@blocknote/react";
 // @ts-ignore - side-effect CSS imports without module declarations
@@ -15,6 +15,7 @@ import "@blocknote/mantine/style.css";
 import * as Y from "yjs";
 import YPartyKitProvider from "y-partykit/provider";
 import { Button } from "@/components/ui/button";
+import InlineHelpPanel from "./InlineHelpPanel";
 
 export type AlignmentResult = {
   overallScore: number;
@@ -58,6 +59,7 @@ type WritingEditorProps = {
   updateIntentBlock: (blockId: string, updates: Partial<IntentBlock>) => void;
   onRegisterYjsExporter?: (blockId: string, exporter: () => Uint8Array) => void;
   onActiveWritingBlockChange?: (intentId: string | null) => void;
+  addHelpRequest?: (request: HelpRequest) => void;
 };
 
 // Generate a consistent color for a user based on their ID
@@ -73,270 +75,6 @@ function getUserColor(userId: string): string {
   return colors[Math.abs(hash) % colors.length];
 }
 
-// Calculate similarity between two strings (0-1, where 1 is identical)
-function calculateSimilarity(str1: string, str2: string): number {
-  const len1 = str1.length;
-  const len2 = str2.length;
-
-  if (len1 === 0 || len2 === 0) return 0;
-  if (str1 === str2) return 1;
-
-  // Use simple character-level comparison for performance
-  // Count matching characters at each position (allowing for small shifts)
-  let matches = 0;
-  const minLen = Math.min(len1, len2);
-  const maxLen = Math.max(len1, len2);
-
-  for (let i = 0; i < minLen; i++) {
-    if (str1[i] === str2[i]) {
-      matches++;
-    }
-  }
-
-  // Similarity ratio based on matching characters
-  return matches / maxLen;
-}
-
-// Fuzzy search that tolerates small differences (1-2 characters)
-function fuzzyIndexOf(haystack: string, needle: string, threshold: number = 0.95): number {
-  const needleLen = needle.length;
-  const haystackLen = haystack.length;
-
-  if (needleLen === 0 || haystackLen === 0 || needleLen > haystackLen) {
-    return -1;
-  }
-
-  // First try exact match for performance
-  const exactMatch = haystack.indexOf(needle);
-  if (exactMatch !== -1) {
-    return exactMatch;
-  }
-
-  // Try fuzzy matching with sliding window
-  let bestMatch = -1;
-  let bestSimilarity = 0;
-
-  for (let i = 0; i <= haystackLen - needleLen; i++) {
-    const substring = haystack.substring(i, i + needleLen);
-    const similarity = calculateSimilarity(needle, substring);
-
-    if (similarity > bestSimilarity && similarity >= threshold) {
-      bestSimilarity = similarity;
-      bestMatch = i;
-    }
-
-    // Early exit if we found a very good match
-    if (similarity >= 0.98) {
-      break;
-    }
-  }
-
-  if (bestMatch !== -1) {
-    console.log(`[Fuzzy Match] Found match with ${(bestSimilarity * 100).toFixed(1)}% similarity`);
-  }
-
-  return bestMatch;
-}
-
-// Apply background colors to BlockNote content based on writing annotations
-// This modifies the local editor only, using Yjs origin to prevent sync
-function applyAlignmentToContent(
-  editor: any,
-  writingAnnotations: Array<{
-    text: string;
-    status: "aligned" | "not-aligned" | "extra";
-    mappedIntentId: string | null;
-  }>,
-  originalWritingContent: string,
-  yjsDoc?: Y.Doc
-) {
-  if (!editor || !writingAnnotations || writingAnnotations.length === 0) return;
-
-  try {
-    const blocks = editor.document;
-
-    // Build full text from editor
-    let fullText = '';
-    const blockTexts: Array<{ block: any; startOffset: number; text: string }> = [];
-
-    blocks.forEach((block: any) => {
-      if (block.type === 'paragraph' && block.content) {
-        const text = block.content.map((c: any) => c.text || '').join('');
-        blockTexts.push({
-          block: block,
-          startOffset: fullText.length,
-          text: text
-        });
-        fullText += text + '\n';
-      }
-    });
-
-    console.log('[Alignment] Full text length:', fullText.length);
-    console.log('[Alignment] Applying styles to', writingAnnotations.length, 'annotations');
-
-    // Validate completeness: check if all annotations cover the full writing
-    const reconstructed = writingAnnotations.map(a => a.text).join('');
-    const normalize = (str: string) => str.replace(/\s+/g, ' ').trim();
-    const reconstructedNorm = normalize(reconstructed);
-    const originalNorm = normalize(originalWritingContent);
-
-    if (reconstructedNorm !== originalNorm) {
-      console.warn('[Alignment] ⚠️ Incomplete coverage detected:', {
-        originalLength: originalNorm.length,
-        reconstructedLength: reconstructedNorm.length,
-        difference: originalNorm.length - reconstructedNorm.length
-      });
-    } else {
-      console.log('[Alignment] ✅ Complete coverage verified');
-    }
-
-    // Calculate offsets for each annotation by searching in fullText
-    console.log('[Alignment] Starting offset calculation...');
-    console.log('[Alignment] fullText (first 200 chars):', fullText.substring(0, 200));
-
-    const annotationsWithOffsets = writingAnnotations.map((annotation, idx) => {
-      const searchText = annotation.text.trim();
-
-      // Try exact match first, then fuzzy match
-      let startOffset = fullText.indexOf(searchText);
-
-      if (startOffset === -1) {
-        console.warn(`[Alignment] ❌ Fragment ${idx} NOT FOUND with exact match`);
-        console.warn('  Status:', annotation.status);
-        console.warn('  Text (first 100):', searchText.substring(0, 100));
-        console.warn('  Text length:', searchText.length);
-
-        // Try normalized search
-        const normalizedSearch = searchText.replace(/\s+/g, ' ');
-        const normalizedFull = fullText.replace(/\s+/g, ' ');
-        const normalizedOffset = normalizedFull.indexOf(normalizedSearch);
-
-        if (normalizedOffset !== -1) {
-          console.warn('  ✓ Found with normalized search at offset:', normalizedOffset);
-          startOffset = normalizedOffset;
-        } else {
-          console.warn('  → Trying fuzzy match...');
-          // Try fuzzy matching (tolerates 1-2 character differences)
-          startOffset = fuzzyIndexOf(fullText, searchText, 0.95);
-
-          if (startOffset !== -1) {
-            console.warn('  ✓ Found with fuzzy match at offset:', startOffset);
-          } else {
-            console.warn('  ✗ Still not found even with fuzzy matching');
-            return null;
-          }
-        }
-      } else {
-        console.log(`[Alignment] ✓ Fragment ${idx} found at offset ${startOffset}, status: ${annotation.status}`);
-      }
-
-      return {
-        ...annotation,
-        startOffset: startOffset,
-        endOffset: startOffset + searchText.length
-      };
-    }).filter(a => a !== null);
-
-    console.log('[Alignment] Found offsets for', annotationsWithOffsets.length, 'out of', writingAnnotations.length, 'annotations');
-
-    // Apply highlighting by rebuilding inline content based on annotations
-    const updatedBlocks: any[] = [];
-
-    blockTexts.forEach((blockInfo) => {
-      const block = blockInfo.block;
-      const blockText = blockInfo.text;
-
-      // Find all annotations that overlap with this block
-      const blockAnnotations = annotationsWithOffsets.filter(a =>
-        a && a.startOffset < blockInfo.startOffset + blockText.length &&
-        a.endOffset > blockInfo.startOffset
-      );
-
-      if (blockAnnotations.length === 0) {
-        return; // No annotations for this block
-      }
-
-      console.log(`[Alignment] Rebuilding block ${block.id} with ${blockAnnotations.length} annotations`);
-
-      // Build new inline content array, one inline per annotation
-      const newContent: any[] = [];
-
-      // Sort annotations by startOffset to process in order
-      const sortedAnnotations = [...blockAnnotations].sort((a, b) => a.startOffset - b.startOffset);
-
-      let currentPosition = 0; // Position within block text
-
-      sortedAnnotations.forEach((annotation, idx) => {
-        const localStart = Math.max(0, annotation.startOffset - blockInfo.startOffset);
-        const localEnd = Math.min(blockText.length, annotation.endOffset - blockInfo.startOffset);
-
-        // Add gap before this annotation (unstyled text)
-        if (currentPosition < localStart) {
-          const gapText = blockText.substring(currentPosition, localStart);
-          newContent.push({
-            type: 'text',
-            text: gapText,
-            styles: {}
-          });
-          console.log(`  Gap [${currentPosition}, ${localStart}]: "${gapText.substring(0, 30)}..."`);
-        }
-
-        // Add this annotation with background color
-        const annotationText = blockText.substring(localStart, localEnd);
-        const backgroundColor =
-          annotation.status === 'aligned' ? 'green' :
-          annotation.status === 'not-aligned' ? 'yellow' :
-          'blue';
-
-        newContent.push({
-          type: 'text',
-          text: annotationText,
-          styles: {
-            backgroundColor: backgroundColor
-          }
-        });
-
-        console.log(`  Annotation ${idx} [${localStart}, ${localEnd}]: ${backgroundColor}, "${annotationText.substring(0, 30)}..."`);
-
-        currentPosition = localEnd;
-      });
-
-      // Add remaining text after last annotation
-      if (currentPosition < blockText.length) {
-        const remainingText = blockText.substring(currentPosition);
-        newContent.push({
-          type: 'text',
-          text: remainingText,
-          styles: {}
-        });
-        console.log(`  Remaining [${currentPosition}, ${blockText.length}]: "${remainingText.substring(0, 30)}..."`);
-      }
-
-      console.log(`  → Created ${newContent.length} inline elements`);
-
-      updatedBlocks.push({
-        oldBlock: block,
-        newBlock: {
-          ...block,
-          content: newContent
-        }
-      });
-    });
-
-    console.log('[Alignment] Updating', updatedBlocks.length, 'blocks with new inline structure');
-    updatedBlocks.forEach(({ oldBlock, newBlock }) => {
-      try {
-        editor.replaceBlocks([oldBlock.id], [newBlock]);
-      } catch (error) {
-        console.error('[Alignment] Error replacing block:', oldBlock.id, error);
-      }
-    });
-
-  } catch (error) {
-    console.error('[Alignment] Error applying styles:', error);
-  }
-}
-
 // Individual BlockNote editor for each root intent
 function IntentEditor({
   intent,
@@ -344,28 +82,30 @@ function IntentEditor({
   roomId,
   user,
   childIntents,
+  allIntents,
   onAlignmentChange,
-  hoveredIntentId,
   onHoverIntent,
   writingBlocks,
   deleteWritingBlock,
   updateIntentBlock,
   onRegisterYjsExporter,
   onActiveWritingBlockChange,
+  addHelpRequest,
 }: {
   intent: IntentBlock;
   writingBlock: WritingBlock;
   roomId: string;
   user: User;
   childIntents: IntentBlock[];
+  allIntents: IntentBlock[];
   onAlignmentChange?: (intentId: string, result: AlignmentResult | null) => void;
-  hoveredIntentId?: string | null;
   onHoverIntent?: (intentId: string | null) => void;
   writingBlocks: WritingBlock[];
   deleteWritingBlock: (blockId: string) => void;
   updateIntentBlock: (blockId: string, updates: Partial<IntentBlock>) => void;
   onRegisterYjsExporter?: (blockId: string, exporter: () => Uint8Array) => void;
   onActiveWritingBlockChange?: (intentId: string | null) => void;
+  addHelpRequest?: (request: HelpRequest) => void;
 }) {
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>("");
@@ -376,7 +116,6 @@ function IntentEditor({
   const [showAlignment, setShowAlignment] = useState(false);
   const [previousContent, setPreviousContent] = useState("");
   const [paragraphCount, setParagraphCount] = useState(0);
-  const [textToIntentMap, setTextToIntentMap] = useState<Map<string, string>>(new Map());
   const [hoverTooltip, setHoverTooltip] = useState<{
     x: number;
     y: number;
@@ -384,6 +123,12 @@ function IntentEditor({
   } | null>(null);
   const tooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isHoveringTooltipRef = useRef(false);
+
+  // Help request state
+  const [selectedText, setSelectedText] = useState<string>("");
+  const [selectionPosition, setSelectionPosition] = useState<{ top: number; left: number } | null>(null);
+  const [showHelpPanel, setShowHelpPanel] = useState(false);
+  const [showHelpButton, setShowHelpButton] = useState(false);
 
   // Use writingBlock.alignmentResult directly as the source of truth
   const alignmentResult = writingBlock.alignmentResult;
@@ -400,6 +145,46 @@ function IntentEditor({
     };
   }, []);
 
+  // Monitor text selection for help request
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      // Don't process selection changes when help panel is open
+      if (showHelpPanel) {
+        return;
+      }
+
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed) {
+        // No selection or cursor only
+        setShowHelpButton(false);
+        setSelectedText("");
+        setSelectionPosition(null);
+        return;
+      }
+
+      // Check if selection is within this editor
+      const range = selection.getRangeAt(0);
+      const container = editorWrapperRef.current;
+      if (!container || !container.contains(range.commonAncestorContainer)) {
+        return;
+      }
+
+      const text = selection.toString().trim();
+      if (text.length > 0) {
+        setSelectedText(text);
+        const rect = range.getBoundingClientRect();
+        setSelectionPosition({
+          top: rect.bottom + window.scrollY,
+          left: rect.left + window.scrollX,
+        });
+        setShowHelpButton(true);
+      }
+    };
+
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => document.removeEventListener("selectionchange", handleSelectionChange);
+  }, [showHelpPanel]);
+
   // Helper: Flatten intentTree to get all intents with their segments
   const flattenIntentTree = useCallback((nodes: IntentTreeNode[]): IntentTreeNode[] => {
     const result: IntentTreeNode[] = [];
@@ -412,41 +197,12 @@ function IntentEditor({
     return result;
   }, []);
 
-  // Build text-to-intent map from alignment data
+  // Auto-enable showAlignment when alignment data is loaded
   useEffect(() => {
-    console.log('[Alignment] Building text-to-intent map:', {
-      intentId: intent.id,
-      intentContent: intent.content.substring(0, 50),
-      hasAlignmentResult: !!writingBlock.alignmentResult,
-      alignmentResultKeys: writingBlock.alignmentResult ? Object.keys(writingBlock.alignmentResult) : []
-    });
-
     if (writingBlock.alignmentResult) {
-      // Build text-to-intent map from Intent Tree
-      const newMap = new Map<string, string>();
-      if (writingBlock.alignmentResult.intentTree) {
-        // Flatten tree to get all intents with their segments
-        const allIntents = flattenIntentTree(writingBlock.alignmentResult.intentTree);
-        allIntents.forEach((intent: any) => {
-          if (intent.intentId && intent.writingSegments) {
-            intent.writingSegments.forEach((segment: any) => {
-              const text = segment.text.trim();
-              newMap.set(text, intent.intentId);
-              // Also store first 100 chars for partial matches
-              if (text.length > 100) {
-                newMap.set(text.substring(0, 100), intent.intentId);
-              }
-            });
-          }
-        });
-      }
-      setTextToIntentMap(newMap);
-
-      // Auto-enable showAlignment when alignment data is loaded (for all users)
-      console.log('[Alignment] Auto-enabling display for alignment data');
       setShowAlignment(true);
     }
-  }, [writingBlock.alignmentResult, intent.id, flattenIntentTree]);
+  }, [writingBlock.alignmentResult]);
 
   const provider = useMemo(
     () => {
@@ -467,7 +223,6 @@ function IntentEditor({
 
         return p;
       } catch (error) {
-        console.error("Failed to create YPartyKitProvider:", error);
         setHasError(true);
         setErrorMessage(error instanceof Error ? error.message : "Provider creation failed");
         return null;
@@ -545,8 +300,8 @@ function IntentEditor({
         }).join('\n\n').trim();
 
         setEditorContent(content);
-      } catch (error) {
-        console.error('[Alignment Overlay] Error reading content:', error);
+      } catch {
+        // Silent fail for content reading
       }
     };
 
@@ -565,8 +320,6 @@ function IntentEditor({
     }
 
     try {
-      console.log('[Alignment Overlay] Building segments from Intent Tree');
-
       // Flatten the tree to get all intents
       const allIntents = flattenIntentTree(alignmentResult.intentTree);
 
@@ -607,8 +360,6 @@ function IntentEditor({
 
       // Sort by position in writing
       allSegments.sort((a, b) => a.positionInWriting - b.positionInWriting);
-
-      console.log('[Alignment Overlay] Collected', allSegments.length, 'writing segments');
 
       // Build final segments array
       const finalSegments: Array<{
@@ -674,10 +425,8 @@ function IntentEditor({
         }
       });
 
-      console.log('[Alignment Overlay] Final segments:', finalSegments.length, 'items');
       return finalSegments;
-    } catch (error) {
-      console.error('[Alignment Overlay] Error building segments:', error);
+    } catch {
       return [];
     }
   }, [alignmentResult, editorContent, flattenIntentTree]);
@@ -787,8 +536,7 @@ function IntentEditor({
         </div>
       </div>
       );
-    } catch (error) {
-      console.error('[Alignment Overlay] Error rendering overlay:', error);
+    } catch {
       return null;
     }
   }, [showAlignment, alignmentSegments, onHoverIntent]);
@@ -903,25 +651,11 @@ function IntentEditor({
 
   // Check alignment when user completes a paragraph
   const checkAlignment = useCallback(async (content: string) => {
-    console.log('[Alignment] checkAlignment called:', {
-      intentId: intent.id,
-      assignee: intent.assignee,
-      currentUserId: user.id,
-      contentLength: content.length,
-      isAssignedToCurrentUser: intent.assignee === user.id,
-    });
-
     // Only check if assigned to current user
-    if (intent.assignee !== user.id) {
-      console.log('[Alignment] Skipping: not assigned to current user');
-      return;
-    }
+    if (intent.assignee !== user.id) return;
 
     // Avoid duplicate checks
-    if (content === lastCheckedContent || content.length < 50) {
-      console.log('[Alignment] Skipping: duplicate or too short');
-      return;
-    }
+    if (content === lastCheckedContent || content.length < 50) return;
 
     setIsCheckingAlignment(true);
     setLastCheckedContent(content);
@@ -959,19 +693,7 @@ function IntentEditor({
       if (response.ok) {
         const result = await response.json();
 
-        console.log('[Alignment] ========== FULL API RESPONSE ==========');
-        console.log(JSON.stringify(result, null, 2));
-        console.log('[Alignment] ========== END API RESPONSE ==========');
-
-        console.log('[Alignment] Summary:', {
-          overallScore: result.overallScore,
-          annotationsCount: result.writingAnnotations?.length,
-          intentCoverageCount: result.intentCoverage?.length
-        });
-
-        // ✓ Notify parent - this will update writingBlock.alignmentResult via PartyKit
-        // ✓ Then our useEffect will rebuild the text-to-intent map
-        // ✓ No need to setAlignmentResult or setTextToIntentMap here!
+        // Notify parent - this will update writingBlock.alignmentResult via PartyKit
         if (onAlignmentChange) {
           onAlignmentChange(intent.id, {
             overallScore: result.overallScore,
@@ -1019,35 +741,22 @@ function IntentEditor({
 
         const shouldTriggerCheck = (() => {
           // Skip if already checked this exact content
-          if (content === lastCheckedContent) {
-            return false;
-          }
+          if (content === lastCheckedContent) return false;
 
           // Skip if content too short
-          if (content.length < 50) {
-            console.log('[Alignment] ⊘ Content too short, skipping check');
-            return false;
-          }
+          if (content.length < 50) return false;
 
           // Condition 1: New paragraph added (paragraph count increased)
-          if (currentParagraphCount > paragraphCount) {
-            console.log('[Alignment] ✓ New paragraph detected, will trigger check');
-            return true;
-          }
+          if (currentParagraphCount > paragraphCount) return true;
 
           // Condition 2: First time writing (has content but never checked)
-          if (previousContent.length === 0 && content.length >= 100) {
-            console.log('[Alignment] ✓ First substantial content, will trigger check');
-            return true;
-          }
+          if (previousContent.length === 0 && content.length >= 100) return true;
 
           // Condition 3: Substantial modification to existing content
           if (previousContent.length > 0) {
-            // Calculate modification percentage using simple character difference
             const maxLen = Math.max(content.length, previousContent.length);
             const minLen = Math.min(content.length, previousContent.length);
 
-            // Count different characters
             let differences = Math.abs(content.length - previousContent.length);
             for (let i = 0; i < minLen; i++) {
               if (content[i] !== previousContent[i]) {
@@ -1056,13 +765,7 @@ function IntentEditor({
             }
 
             const modificationPercentage = (differences / maxLen) * 100;
-
-            if (modificationPercentage > 20) {
-              console.log(`[Alignment] ✓ Substantial modification detected (${modificationPercentage.toFixed(1)}%), will trigger check`);
-              return true;
-            }
-
-            console.log(`[Alignment] ⊘ Modification too small (${modificationPercentage.toFixed(1)}%), skipping check`);
+            if (modificationPercentage > 20) return true;
           }
 
           return false;
@@ -1076,28 +779,79 @@ function IntentEditor({
         if (shouldTriggerCheck) {
           // Debounce: wait 2 seconds after typing stops
           debounceTimeout = setTimeout(() => {
-            console.log('[Alignment] Triggering auto-check, content length:', content.length);
             checkAlignment(content);
           }, 2000);
         }
-      } catch (error) {
-        console.error('[Alignment] Error reading editor content:', error);
+      } catch {
+        // Silent fail for editor content reading
       }
     };
 
     // Listen to editor changes
-    try {
-      const unsubscribe = editor.onChange(handleUpdate);
-      return () => {
-        if (debounceTimeout) {
-          clearTimeout(debounceTimeout);
-        }
-        unsubscribe();
-      };
-    } catch (error) {
-      console.error('[Alignment] Error setting up onChange listener:', error);
-    }
+    const unsubscribe = editor.onChange(handleUpdate);
+    return () => {
+      if (debounceTimeout) {
+        clearTimeout(debounceTimeout);
+      }
+      unsubscribe();
+    };
   }, [editor, checkAlignment, lastCheckedContent, paragraphCount, previousContent]);
+
+  // Handle help request submission (don't close panel - let user continue chatting)
+  const handleHelpRequestSubmit = useCallback((request: Omit<HelpRequest, 'id' | 'createdAt'>) => {
+    if (!addHelpRequest) return;
+
+    const fullRequest: HelpRequest = {
+      ...request,
+      id: `help-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      createdAt: Date.now(),
+    };
+
+    addHelpRequest(fullRequest);
+    // Don't close panel here - user may want to continue chatting with AI
+  }, [addHelpRequest]);
+
+  // Handle closing the help panel (called when user clicks "Done" or outside)
+  const handleHelpPanelClose = useCallback(() => {
+    setShowHelpPanel(false);
+    setShowHelpButton(false);
+    setSelectedText("");
+    setSelectionPosition(null);
+  }, []);
+
+  // Handle AI judgment for help request
+  const handleAIJudgment = useCallback(async (request: HelpRequest): Promise<HelpRequest['aiJudgment']> => {
+    try {
+      const response = await fetch('/api/judge-help-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: request.question,
+          selectedText: request.selectedText,
+          currentIntentId: intent.id,
+          currentIntentContent: intent.content,
+          allIntents: allIntents.map(i => ({
+            id: i.id,
+            content: i.content,
+            parentId: i.parentId,
+            level: i.level,
+          })),
+        }),
+      });
+
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch (error) {
+      console.error('AI judgment failed:', error);
+    }
+
+    // Default: assume it's a personal question if AI fails
+    return {
+      isTeamRelevant: false,
+      reason: '无法判断，默认为个人问题',
+    };
+  }, [intent.id, intent.content, allIntents]);
 
   // Manual alignment check handler
   const handleManualCheck = useCallback(async () => {
@@ -1114,10 +868,10 @@ function IntentEditor({
 
       if (content.length > 0) {
         await checkAlignment(content);
-        setShowAlignment(true); // Automatically show alignment after manual check
+        setShowAlignment(true);
       }
-    } catch (error) {
-      console.error('[Alignment] Error during manual check:', error);
+    } catch {
+      // Silent fail for manual check
     }
   }, [editor, checkAlignment]);
 
@@ -1126,10 +880,8 @@ function IntentEditor({
     const handleError = (event: ErrorEvent) => {
       const errorMsg = event.message || "";
 
-      // Check for position errors
+      // Check for position errors - these are usually transient during sync
       if (errorMsg.includes("Position") && errorMsg.includes("out of range")) {
-        setHasError(true);
-        setErrorMessage(`Document corrupted: ${errorMsg}`);
         event.preventDefault();
         return;
       }
@@ -1145,9 +897,8 @@ function IntentEditor({
     const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
       const reason = event.reason?.message || event.reason || "";
       if (typeof reason === "string" && reason.includes("Position")) {
-        setHasError(true);
-        setErrorMessage(`Async error: ${reason}`);
         event.preventDefault();
+        return;
       }
     };
 
@@ -1323,6 +1074,45 @@ function IntentEditor({
         {mounted ? new Date(writingBlock.updatedAt).toLocaleTimeString() : '\u00A0'}
       </div>
 
+      {/* Floating Help Button - appears when text is selected */}
+      {showHelpButton && selectionPosition && !showHelpPanel && (
+        <div
+          className="fixed z-40 animate-in fade-in-0 zoom-in-95"
+          style={{
+            top: selectionPosition.top + 5,
+            left: selectionPosition.left,
+          }}
+        >
+          <Button
+            size="sm"
+            variant="secondary"
+            className="h-7 px-2 shadow-md border bg-white hover:bg-blue-50"
+            onClick={() => setShowHelpPanel(true)}
+          >
+            <HelpCircle className="h-3.5 w-3.5 mr-1 text-blue-500" />
+            <span className="text-xs">Ask for Help</span>
+          </Button>
+        </div>
+      )}
+
+      {/* Inline Help Panel */}
+      {showHelpPanel && selectionPosition && (
+        <InlineHelpPanel
+          selectedText={selectedText}
+          selectionPosition={selectionPosition}
+          writingBlockId={writingBlock.id}
+          intentBlockId={intent.id}
+          intentContent={intent.content}
+          allIntents={allIntents}
+          userId={user.id}
+          userName={user.user_metadata?.name || user.email?.split('@')[0]}
+          userEmail={user.email || undefined}
+          onSubmit={handleHelpRequestSubmit}
+          onClose={handleHelpPanelClose}
+          onAIJudgment={handleAIJudgment}
+        />
+      )}
+
       {/* Hover Tooltip for AI Notes with Action Buttons */}
       {hoverTooltip && (
         <div
@@ -1380,7 +1170,6 @@ function IntentEditor({
                       className="h-6 px-2 text-[10px]"
                       onClick={() => {
                         // TODO: Add this content to intent structure
-                        console.log('[Action] Add to intent structure:', hoverTooltip.annotation.text);
                       }}
                     >
                       Add to Intent
@@ -1391,7 +1180,6 @@ function IntentEditor({
                       className="h-6 px-2 text-[10px]"
                       onClick={() => {
                         // TODO: Suggest removing this content
-                        console.log('[Action] Remove from writing:', hoverTooltip.annotation.text);
                       }}
                     >
                       Remove
@@ -1407,7 +1195,6 @@ function IntentEditor({
                       className="h-6 px-2 text-[10px]"
                       onClick={() => {
                         // TODO: Update writing to align
-                        console.log('[Action] Update writing for:', hoverTooltip.annotation.text);
                       }}
                     >
                       Update Writing
@@ -1418,7 +1205,6 @@ function IntentEditor({
                       className="h-6 px-2 text-[10px]"
                       onClick={() => {
                         // TODO: Update intent to match
-                        console.log('[Action] Update intent for:', hoverTooltip.annotation.text);
                       }}
                     >
                       Update Intent
@@ -1453,6 +1239,7 @@ export default function WritingEditor({
   updateIntentBlock,
   onRegisterYjsExporter,
   onActiveWritingBlockChange,
+  addHelpRequest,
 }: WritingEditorProps) {
   // Ensure we have writing blocks for all root-level intents
   useEffect(() => {
@@ -1474,17 +1261,6 @@ export default function WritingEditor({
       }
     }
   });
-
-  // Log if duplicates detected
-  const linkedIntentIds = writingBlocks.filter(b => b.linkedIntentId).map(b => b.linkedIntentId);
-  const uniqueIntentIds = new Set(linkedIntentIds);
-  if (linkedIntentIds.length !== uniqueIntentIds.size) {
-    console.warn('[WritingEditor] ⚠️ Duplicate writing blocks detected:', {
-      totalBlocks: linkedIntentIds.length,
-      uniqueIntents: uniqueIntentIds.size,
-      duplicates: linkedIntentIds.length - uniqueIntentIds.size
-    });
-  }
 
   // Helper function to get all child intents for a root intent
   const getChildIntents = (rootIntentId: string): IntentBlock[] => {
@@ -1526,14 +1302,15 @@ export default function WritingEditor({
                 roomId={roomId}
                 user={user}
                 childIntents={childIntents}
+                allIntents={intentBlocks}
                 onAlignmentChange={onAlignmentChange}
-                hoveredIntentId={hoveredIntentId}
                 onHoverIntent={onHoverIntent}
                 writingBlocks={writingBlocks}
                 deleteWritingBlock={deleteWritingBlock}
                 updateIntentBlock={updateIntentBlock}
                 onRegisterYjsExporter={onRegisterYjsExporter}
                 onActiveWritingBlockChange={onActiveWritingBlockChange}
+                addHelpRequest={addHelpRequest}
               />
             );
           })

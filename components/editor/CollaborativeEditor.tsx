@@ -22,19 +22,22 @@ export default function CollaborativeEditor({
   documentTitle,
 }: CollaborativeEditorProps) {
   const router = useRouter();
-  const [selectedWritingBlockId, setSelectedWritingBlockId] = useState<string | null>(null);
   const [selectedIntentBlockId, setSelectedIntentBlockId] = useState<string | null>(null);
   const [lastBackup, setLastBackup] = useState<Date | null>(null);
   const [isBackingUp, setIsBackingUp] = useState(false);
-  const [panelWidth, setPanelWidth] = useState(384); // 96 * 4 = 384px (w-96)
+  // Right panel width: default to 50% of screen (Writing 1/2, Intent 1/4, Rules 1/4)
+  const [panelWidth, setPanelWidth] = useState(720); // SSR-safe default
   const [isResizing, setIsResizing] = useState(false);
   const [alignmentResults, setAlignmentResults] = useState<Map<string, AlignmentResult>>(new Map());
   const [hoveredIntentId, setHoveredIntentId] = useState<string | null>(null);
   const [activeIntentId, setActiveIntentId] = useState<string | null>(null); // Currently editing intent
-  const [isRestoring, setIsRestoring] = useState(false);
   const [yjsExporters, setYjsExporters] = useState<Map<string, () => Uint8Array>>(new Map());
   const [shouldRemindBackup, setShouldRemindBackup] = useState(false);
   const [timeSinceLastBackup, setTimeSinceLastBackup] = useState<number>(0);
+
+  // Local-only suggested intents (not synced to other users)
+  // Map<intentId, AlignmentResult with FULL intentTree including suggestions>
+  const [localSuggestedIntents, setLocalSuggestedIntents] = useState<Map<string, AlignmentResult>>(new Map());
 
   const {
     state,
@@ -49,45 +52,20 @@ export default function CollaborativeEditor({
     addRuleBlock,
     updateRuleBlock,
     deleteRuleBlock,
+    addHelpRequest,
   } = useRoom(roomId, user);
 
   const writingBlocks = state.writingBlocks;
   const intentBlocks = state.intentBlocks;
   const ruleBlocks = state.ruleBlocks;
 
+  // Set initial panel width to 50% of screen on client side
+  useEffect(() => {
+    setPanelWidth(Math.floor(window.innerWidth / 2));
+  }, []);
+
   // Load alignment results from WritingBlocks when they change
   useEffect(() => {
-    // Check for duplicates
-    const blockIds = writingBlocks.map(wb => wb.id);
-    const uniqueIds = new Set(blockIds);
-    const hasDuplicates = blockIds.length !== uniqueIds.size;
-
-    console.log('[CollaborativeEditor] WritingBlocks changed, loading alignment results:', {
-      totalBlocks: writingBlocks.length,
-      uniqueBlocks: uniqueIds.size,
-      hasDuplicates,
-      blocksWithAlignment: writingBlocks.filter(wb => wb.alignmentResult).length,
-      linkedIntentCounts: writingBlocks.reduce((acc, wb) => {
-        const key = wb.linkedIntentId || 'null';
-        acc[key] = (acc[key] || 0) + 1;
-        return acc;
-      }, {} as Record<string, number>),
-      blockDetails: writingBlocks.slice(0, 10).map(wb => ({ // Only first 10 to avoid spam
-        id: wb.id.substring(0, 20),
-        linkedIntentId: wb.linkedIntentId?.substring(0, 20),
-        hasAlignment: !!wb.alignmentResult,
-        alignmentKeys: wb.alignmentResult ? Object.keys(wb.alignmentResult) : []
-      }))
-    });
-
-    if (hasDuplicates) {
-      console.error('[CollaborativeEditor] ⚠️ DUPLICATE BLOCKS DETECTED!', {
-        totalBlocks: writingBlocks.length,
-        uniqueBlocks: uniqueIds.size,
-        duplicateCount: writingBlocks.length - uniqueIds.size
-      });
-    }
-
     const newResults = new Map<string, AlignmentResult>();
     writingBlocks.forEach(wb => {
       if (wb.linkedIntentId && wb.alignmentResult) {
@@ -95,71 +73,8 @@ export default function CollaborativeEditor({
       }
     });
     setAlignmentResults(newResults);
-
-    console.log('[CollaborativeEditor] Alignment results map updated:', {
-      mapSize: newResults.size,
-      intentIds: Array.from(newResults.keys()).map(id => id.substring(0, 20))
-    });
   }, [writingBlocks]);
 
-  // Auto-restore from Supabase if PartyKit state is empty (dev mode restart)
-  useEffect(() => {
-    // Temporarily disabled to prevent "Position out of range" errors
-    // The issue: Restoring writingBlock metadata without Yjs document content
-    // causes BlockNote to fail when trying to render non-existent positions
-    //
-    // TODO: Implement full Yjs state backup/restore to enable this feature
-    // For now: Keep PartyKit server running to avoid data loss
-    return;
-
-    const attemptRestore = async () => {
-      // Only restore if connected and state is empty
-      if (!isConnected) return;
-      if (intentBlocks.length > 0 || writingBlocks.length > 0) return;
-
-      console.log('[Restore] Attempting to restore from Supabase backup...');
-      setIsRestoring(true);
-
-      try {
-        const response = await fetch('/api/restore-document', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ documentId: roomId }),
-        });
-
-        if (response.ok) {
-          const result = await response.json();
-          console.log('[Restore] Found backup:', result);
-
-          // Restore intent blocks
-          if (result.backup.intentBlocks && result.backup.intentBlocks.length > 0) {
-            result.backup.intentBlocks.forEach((block: any) => {
-              addIntentBlockRaw(block);
-            });
-          }
-
-          // Restore writing blocks
-          if (result.backup.writingBlocks && result.backup.writingBlocks.length > 0) {
-            result.backup.writingBlocks.forEach((block: any) => {
-              addWritingBlockRaw(block);
-            });
-          }
-
-          console.log('[Restore] Successfully restored from backup');
-        } else {
-          console.log('[Restore] No backup found or error:', await response.text());
-        }
-      } catch (error) {
-        console.error('[Restore] Error:', error);
-      } finally {
-        setIsRestoring(false);
-      }
-    };
-
-    // Wait a bit for initial sync, then attempt restore if needed
-    const timer = setTimeout(attemptRestore, 2000);
-    return () => clearTimeout(timer);
-  }, [isConnected, intentBlocks.length, writingBlocks.length, roomId, addIntentBlockRaw, addWritingBlockRaw]);
 
   // Callback to register Yjs exporters from WritingEditor
   const handleRegisterYjsExporter = useCallback((blockId: string, exporter: () => Uint8Array) => {
@@ -172,22 +87,18 @@ export default function CollaborativeEditor({
 
   // Manual backup to Supabase with full Yjs snapshots
   const backupToSupabase = useCallback(async () => {
-    if (isBackingUp) return; // Prevent concurrent backups
+    if (isBackingUp) return;
 
     setIsBackingUp(true);
     try {
-      console.log(`[Backup] Starting manual backup for document ${roomId}`);
-      console.log(`[Backup] Found ${yjsExporters.size} Yjs documents to export`);
-
       // Collect all Yjs snapshots
       const yjsSnapshots: Record<string, number[]> = {};
       yjsExporters.forEach((exporter, blockId) => {
         try {
           const snapshot = exporter();
-          yjsSnapshots[blockId] = Array.from(snapshot); // Convert Uint8Array to number[]
-          console.log(`[Backup] Exported Yjs snapshot for block ${blockId}: ${snapshot.length} bytes`);
-        } catch (error) {
-          console.error(`[Backup] Failed to export Yjs snapshot for block ${blockId}:`, error);
+          yjsSnapshots[blockId] = Array.from(snapshot);
+        } catch {
+          // Silent fail for individual snapshot exports
         }
       });
 
@@ -205,45 +116,18 @@ export default function CollaborativeEditor({
       if (response.ok) {
         const result = await response.json();
         setLastBackup(new Date(result.backedUpAt));
-        setShouldRemindBackup(false); // Reset reminder after successful backup
-        console.log(`[Backup] Success:`, result);
-        // Success is shown via the "Saved Xs ago" indicator, no need for alert
+        setShouldRemindBackup(false);
       } else {
         const errorText = await response.text();
-        console.error('[Backup] Failed:', errorText);
-        // Only alert on error, not success
         alert(`Backup failed: ${errorText}`);
       }
     } catch (error) {
-      console.error('[Backup] Error:', error);
       alert(`Backup error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsBackingUp(false);
     }
   }, [roomId, intentBlocks, writingBlocks, yjsExporters, isBackingUp]);
 
-  // Setup auto-backup interval
-  useEffect(() => {
-    // Temporarily disabled until Supabase RLS is fixed
-    return;
-
-    if (!isConnected) return;
-
-    // Initial backup after 5 seconds
-    const initialTimeout = setTimeout(() => {
-      backupToSupabase();
-    }, 5000);
-
-    // Then every 30 seconds
-    const interval = setInterval(() => {
-      backupToSupabase();
-    }, 30000);
-
-    return () => {
-      clearTimeout(initialTimeout);
-      clearInterval(interval);
-    };
-  }, [isConnected, backupToSupabase]);
 
   // Check if user should be reminded to backup
   useEffect(() => {
@@ -271,38 +155,6 @@ export default function CollaborativeEditor({
 
     return () => clearInterval(interval);
   }, [isConnected, lastBackup]);
-
-  // Add writing block
-  const addWritingBlock = useCallback(() => {
-    // Calculate safe position
-    let maxPosition = -1;
-    if (writingBlocks.length > 0) {
-      const positions = writingBlocks.map(b => b.position).filter(p => typeof p === 'number' && !isNaN(p));
-      if (positions.length > 0) {
-        maxPosition = Math.max(...positions);
-      }
-    }
-
-    const newBlock: WritingBlock = {
-      id: `writing-${Date.now()}-${Math.random()}`,
-      content: "",
-      position: maxPosition + 1,
-      linkedIntentId: null,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    addWritingBlockRaw(newBlock);
-    return newBlock;
-  }, [writingBlocks, addWritingBlockRaw]);
-
-  // Update writing block (not used in new BlockNote version, but kept for compatibility)
-  const updateWritingBlock = useCallback(
-    (blockId: string, content: string) => {
-      // BlockNote handles its own content sync via Yjs
-      // This is only for metadata updates if needed
-    },
-    []
-  );
 
   // Delete writing block
   const deleteWritingBlock = useCallback(
@@ -603,69 +455,74 @@ export default function CollaborativeEditor({
   // Reorder blocks (for drag and drop)
   const reorderBlocks = useCallback(
     (draggedId: string, targetId: string, position: 'before' | 'after') => {
-      console.log('[CollaborativeEditor] reorderBlocks called:', { draggedId, targetId, position });
-
       const draggedBlock = intentBlocks.find((b) => b.id === draggedId);
       const targetBlock = intentBlocks.find((b) => b.id === targetId);
 
-      console.log('[CollaborativeEditor] Found blocks:', {
-        draggedBlock: draggedBlock ? { id: draggedBlock.id, content: draggedBlock.content, position: draggedBlock.position } : null,
-        targetBlock: targetBlock ? { id: targetBlock.id, content: targetBlock.content, position: targetBlock.position } : null
-      });
-
-      if (!draggedBlock || !targetBlock) {
-        console.log('[CollaborativeEditor] Missing blocks, returning');
-        return;
-      }
+      if (!draggedBlock || !targetBlock) return;
 
       // Don't allow dragging a parent into its own child
       let current = targetBlock;
-      while (current.parentId) {
-        if (current.parentId === draggedId) {
-          console.log('[CollaborativeEditor] Cannot drag parent into child, returning');
-          return;
-        }
+      while (current?.parentId) {
+        if (current.parentId === draggedId) return;
         current = intentBlocks.find((b) => b.id === current.parentId)!;
         if (!current) break;
       }
 
-      // Calculate new position
-      let newPosition: number;
+      // Get all siblings (blocks with same parentId as target)
+      const parentId = targetBlock.parentId;
+      const siblings = intentBlocks
+        .filter((b) => b.parentId === parentId)
+        .sort((a, b) => a.position - b.position);
+
+      if (siblings.length === 0) return;
+
+      // Check if dragged block is already in siblings
+      const draggedInSiblings = siblings.some(b => b.id === draggedId);
+
+      // Create new order by removing dragged block (if present) and inserting at new position
+      const withoutDragged = draggedInSiblings
+        ? siblings.filter((b) => b.id !== draggedId)
+        : siblings;
+
+      const targetIndex = withoutDragged.findIndex((b) => b.id === targetId);
+      if (targetIndex === -1) return;
+
+      let newOrder: IntentBlock[];
       if (position === 'before') {
-        newPosition = targetBlock.position - 0.5;
+        newOrder = [
+          ...withoutDragged.slice(0, targetIndex),
+          draggedBlock,
+          ...withoutDragged.slice(targetIndex)
+        ];
       } else {
-        newPosition = targetBlock.position + 0.5;
+        newOrder = [
+          ...withoutDragged.slice(0, targetIndex + 1),
+          draggedBlock,
+          ...withoutDragged.slice(targetIndex + 1)
+        ];
       }
 
-      console.log('[CollaborativeEditor] Updating position:', {
-        draggedId,
-        oldPosition: draggedBlock.position,
-        newPosition,
-        targetParentId: targetBlock.parentId,
-        targetLevel: targetBlock.level
-      });
+      // Update all blocks in newOrder with sequential positions
+      newOrder.forEach((block, index) => {
+        const updates: Partial<IntentBlock> = {
+          position: index,
+          updatedAt: Date.now(),
+        };
 
-      // Update the dragged block's position and parent
-      updateIntentBlockRaw(draggedId, {
-        position: newPosition,
-        parentId: targetBlock.parentId,
-        level: targetBlock.level,
-        updatedAt: Date.now(),
-      });
+        // For the dragged block, also update parent and level
+        if (block.id === draggedId) {
+          updates.parentId = targetBlock.parentId;
+          updates.level = targetBlock.level;
+        }
 
-      console.log('[CollaborativeEditor] Position update sent, should reflect immediately via optimistic update');
+        updateIntentBlockRaw(block.id, updates);
+      });
     },
     [intentBlocks, updateIntentBlockRaw]
   );
 
   // Handle alignment result changes
   const handleAlignmentChange = useCallback((intentId: string, result: AlignmentResult | null) => {
-    console.log('[Alignment Change] Called with:', {
-      intentId,
-      hasResult: !!result,
-      resultKeys: result ? Object.keys(result) : []
-    });
-
     setAlignmentResults((prev) => {
       const next = new Map(prev);
       if (result) {
@@ -678,37 +535,20 @@ export default function CollaborativeEditor({
 
     // Also save to WritingBlock so all users can see the alignment status
     const writingBlock = writingBlocks.find(wb => wb.linkedIntentId === intentId);
-    const intent = intentBlocks.find(ib => ib.id === intentId);
-
-    console.log('[Alignment Change] WritingBlock lookup:', {
-      intentId,
-      intentContent: intent?.content.substring(0, 50),
-      intentParentId: intent?.parentId,
-      isRootIntent: !intent?.parentId,
-      foundWritingBlock: !!writingBlock,
-      writingBlockId: writingBlock?.id,
-      hasUpdateFunction: !!updateWritingBlockRaw,
-      allWritingBlocks: writingBlocks.map(wb => ({
-        id: wb.id.substring(0, 20),
-        linkedIntentId: wb.linkedIntentId
-      }))
-    });
 
     if (writingBlock && updateWritingBlockRaw) {
-      console.log('[Alignment Change] ✓ Calling updateWritingBlockRaw:', {
-        writingBlockId: writingBlock.id,
-        hasResult: !!result,
-        functionType: typeof updateWritingBlockRaw
-      });
       updateWritingBlockRaw(writingBlock.id, { alignmentResult: result });
-      console.log('[Alignment Change] ✓ updateWritingBlockRaw call completed');
-    } else {
-      console.log('[Alignment Change] ✗ Cannot save - missing writingBlock or updateFunction:', {
-        hasWritingBlock: !!writingBlock,
-        hasUpdateFunction: !!updateWritingBlockRaw
-      });
+
+      // Save FULL result (with suggested intents) to local-only state for Intent Panel
+      if (result) {
+        setLocalSuggestedIntents(prev => {
+          const updated = new Map(prev);
+          updated.set(intentId, result);
+          return updated;
+        });
+      }
     }
-  }, [writingBlocks, intentBlocks, updateWritingBlockRaw]);
+  }, [writingBlocks, updateWritingBlockRaw]);
 
   // Handle hover on intent or sentence
   const handleHoverIntent = useCallback((intentId: string | null) => {
@@ -724,7 +564,9 @@ export default function CollaborativeEditor({
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing) return;
       const newWidth = window.innerWidth - e.clientX;
-      setPanelWidth(Math.max(300, Math.min(800, newWidth))); // Min 300px, max 800px
+      // Min 400px, max 75% of screen width
+      const maxWidth = Math.floor(window.innerWidth * 0.75);
+      setPanelWidth(Math.max(400, Math.min(maxWidth, newWidth)));
     };
 
     const handleMouseUp = () => {
@@ -889,12 +731,6 @@ export default function CollaborativeEditor({
               }`}
               title={isConnected ? "Connected" : "Disconnected"}
             />
-            {isRestoring && (
-              <div className="flex items-center gap-1.5">
-                <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-                <p className="text-xs text-muted-foreground">Restoring from backup...</p>
-              </div>
-            )}
             {isBackingUp ? (
               <div className="flex items-center gap-1.5">
                 <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
@@ -928,6 +764,7 @@ export default function CollaborativeEditor({
             updateIntentBlock={updateIntentBlockRaw}
             onRegisterYjsExporter={handleRegisterYjsExporter}
             onActiveWritingBlockChange={setActiveIntentId}
+            addHelpRequest={addHelpRequest}
           />
         </div>
 
@@ -943,8 +780,8 @@ export default function CollaborativeEditor({
           className="flex flex-row bg-muted/30 overflow-hidden"
           style={{ width: `${panelWidth}px` }}
         >
-          {/* Intent Panel - Left side (60% width) */}
-          <div className="flex-[3] border-r overflow-hidden min-w-0">
+          {/* Intent Panel - 50% of right panel (1/4 of screen) */}
+          <div className="flex-1 border-r overflow-hidden min-w-0">
             <IntentPanel
               blocks={intentBlocks}
               addBlock={addIntentBlock}
@@ -963,14 +800,15 @@ export default function CollaborativeEditor({
               importMarkdown={importMarkdownIntents}
               currentUser={user}
               alignmentResults={alignmentResults}
+              localSuggestedIntents={localSuggestedIntents}
               hoveredIntentId={hoveredIntentId}
               onHoverIntent={handleHoverIntent}
               activeIntentId={activeIntentId}
             />
           </div>
 
-          {/* Shared Rules Panel - Right side (40% width) */}
-          <div className="flex-[2] overflow-hidden min-w-0">
+          {/* Shared Rules Panel - 50% of right panel (1/4 of screen) */}
+          <div className="flex-1 overflow-hidden min-w-0">
             <SharedRulesPanel
               rules={ruleBlocks}
               addRule={addRuleBlock}
