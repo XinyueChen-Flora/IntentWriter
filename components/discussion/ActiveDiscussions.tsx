@@ -31,20 +31,6 @@ export default function ActiveDiscussions({
   // Filter to only team discussions
   const activeDiscussions = useMemo(() => {
     const discussions = helpRequests.filter(hr => hr.status === "team" && hr.teamDiscussion);
-
-    // Debug log
-    console.log("[ActiveDiscussions] Current user:", currentUserId);
-    console.log("[ActiveDiscussions] Active discussions:", discussions.map(d => ({
-      id: d.id,
-      question: d.question?.substring(0, 30),
-      createdBy: d.createdBy,
-      isMyDiscussion: d.createdBy === currentUserId,
-      requiredResponders: d.teamDiscussion?.requiredResponders,
-      optionalResponders: d.teamDiscussion?.optionalResponders,
-      amIRequired: d.teamDiscussion?.requiredResponders?.includes(currentUserId),
-      amIOptional: d.teamDiscussion?.optionalResponders?.includes(currentUserId),
-    })));
-
     return discussions;
   }, [helpRequests, currentUserId]);
 

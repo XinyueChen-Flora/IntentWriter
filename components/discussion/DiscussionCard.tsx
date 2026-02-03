@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp, MessageSquare, Vote, Play, Clock, Check, X, AlertTriangle, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { HelpRequest, IntentBlock, ImpactPreview } from "@/lib/partykit";
+import type { HelpRequest, IntentBlock } from "@/lib/partykit";
 import UserAvatar from "@/components/user/UserAvatar";
 
 type DiscussionCardProps = {
@@ -40,15 +40,6 @@ export default function DiscussionCard({
   const isInitiator = discussion.createdBy === currentUserId;
   const teamDiscussion = discussion.teamDiscussion;
   const preview = discussion.impactPreview;
-
-  // Debug log for user identification
-  console.log("[DiscussionCard] User check:", {
-    currentUserId,
-    discussionCreatedBy: discussion.createdBy,
-    isInitiator,
-    requiredResponders: teamDiscussion?.requiredResponders,
-    optionalResponders: teamDiscussion?.optionalResponders,
-  });
 
   if (!teamDiscussion || !preview) return null;
 
@@ -93,8 +84,9 @@ export default function DiscussionCard({
   // Get affected section names
   const affectedSectionNames = preview.affectedRootIntentIds?.map(id => {
     const intent = intentBlocks.find(i => i.id === id);
-    return intent?.content?.substring(0, 30) + (intent?.content && intent.content.length > 30 ? "..." : "");
-  }).filter(Boolean) || [];
+    if (!intent?.content) return null;
+    return intent.content.length > 30 ? intent.content.substring(0, 30) + "..." : intent.content;
+  }).filter((name): name is string => !!name) || [];
 
   const handleSubmitResponse = () => {
     if (participationType === "vote" && !selectedVote) return;
@@ -311,7 +303,7 @@ export default function DiscussionCard({
           )}
 
           {/* RESPONDER VIEW */}
-          {!isInitiator && shouldRespond && !hasResponded && (
+          {!isInitiator && !hasResponded && (
             <div className="border-t pt-3">
               <div className="text-xs font-medium text-gray-700 mb-2">Your Response</div>
 
@@ -357,8 +349,10 @@ export default function DiscussionCard({
                 <div className="flex gap-2 mb-3">
                   <button
                     onClick={() => {
-                      setSelectedVote(teamDiscussion.selectedOption as "A" | "B");
-                      setComment("Acknowledged. Will adjust my section accordingly.");
+                      onRespond({
+                        vote: teamDiscussion.selectedOption as "A" | "B",
+                        comment: "Acknowledged. Will adjust my section accordingly.",
+                      });
                     }}
                     className="flex-1 py-2 px-3 rounded border-2 border-green-300 bg-green-50 text-green-700 text-sm font-medium hover:bg-green-100"
                   >
@@ -379,8 +373,10 @@ export default function DiscussionCard({
                 <div className="flex gap-2 mb-3">
                   <button
                     onClick={() => {
-                      setSelectedVote(teamDiscussion.selectedOption as "A" | "B");
-                      setComment("Looks good. I'll keep my section aligned.");
+                      onRespond({
+                        vote: teamDiscussion.selectedOption as "A" | "B",
+                        comment: "Looks good. I'll keep my section aligned.",
+                      });
                     }}
                     className="flex-1 py-2 px-3 rounded border-2 border-green-300 bg-green-50 text-green-700 text-sm font-medium hover:bg-green-100"
                   >

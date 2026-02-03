@@ -100,13 +100,6 @@ function WritingPreviewOverlay({
     (p) => p.intentId === intentId
   );
 
-  // Debug: Log what we're looking for and what we got
-  console.log("[WritingPreviewOverlay] Looking for intentId:", intentId);
-  console.log("[WritingPreviewOverlay] Option A paragraphPreviews:", activePreview.optionA.paragraphPreviews);
-  console.log("[WritingPreviewOverlay] Option B paragraphPreviews:", activePreview.optionB.paragraphPreviews);
-  console.log("[WritingPreviewOverlay] Found previewA:", previewA);
-  console.log("[WritingPreviewOverlay] Found previewB:", previewB);
-
   // Check if we have actual written content
   const hasWrittenContent = currentContent && currentContent.trim().length > 0;
 
@@ -1091,17 +1084,19 @@ function IntentEditor({
   }
 
   return (
-    <div className="border-l-4 border-border hover:border-primary/50 bg-card pl-4 py-3 transition-colors">
-      {/* Intent Title */}
-      <div className="mb-2 flex items-start justify-between gap-3">
-        <div className="flex-1 prose prose-sm max-w-none">
+    <div className="border-l-4 border-border hover:border-primary/50 bg-card pl-4 py-3 transition-colors flex flex-row gap-4">
+      {/* Left Panel: Title, Assignee, Intent Tag, Alignment Controls */}
+      <div className="w-48 flex-shrink-0 flex flex-col gap-2">
+        {/* Intent Title */}
+        <div className="prose prose-sm max-w-none">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>
             {intent.content}
           </ReactMarkdown>
         </div>
-        {/* Show assignee if exists */}
+
+        {/* Assignee badge */}
         {intent.assignee && (
-          <div className="flex-shrink-0 flex items-center gap-1.5 px-2 py-1 bg-primary/10 rounded-md">
+          <div className="flex items-center gap-1.5 px-2 py-1 bg-primary/10 rounded-md w-fit">
             <span className="text-xs text-muted-foreground">Assignee:</span>
             <span className="text-xs font-medium">
               {intent.assignee === user.id
@@ -1110,106 +1105,108 @@ function IntentEditor({
             </span>
           </div>
         )}
-      </div>
 
-      {/* Alignment Controls */}
-      <div className="mb-2 flex items-center gap-3 text-xs">
-        <label className="flex items-center gap-1.5 cursor-pointer hover:text-primary transition-colors">
-          <input
-            type="checkbox"
-            checked={showAlignment}
-            onChange={(e) => {
-              const isChecked = e.target.checked;
-              setShowAlignment(isChecked);
-            }}
-            className="w-3.5 h-3.5 cursor-pointer"
-          />
-          <span className="text-muted-foreground">Show alignment</span>
-        </label>
-        <Button
-          onClick={handleManualCheck}
-          disabled={isCheckingAlignment}
-          variant="outline"
-          size="sm"
-          className="h-6 px-2 text-xs"
-        >
-          {isCheckingAlignment ? 'Checking...' : 'Check now'}
-        </Button>
-      </div>
-
-      {/* Intent Tag (if exists) */}
-      {intent.intentTag && (
-        <div className="mb-3 flex items-start gap-1.5 text-xs">
-          <Lightbulb className="h-3.5 w-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
-          <div className="prose prose-xs text-amber-900 dark:text-amber-100">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {intent.intentTag}
-            </ReactMarkdown>
+        {/* Intent Tag (if exists) */}
+        {intent.intentTag && (
+          <div className="flex items-start gap-1.5 text-xs">
+            <Lightbulb className="h-3.5 w-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="prose prose-xs text-amber-900 dark:text-amber-100">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {intent.intentTag}
+              </ReactMarkdown>
+            </div>
           </div>
-        </div>
-      )}
-
-      {/* Alignment Check Status */}
-      {isCheckingAlignment && (
-        <div className="mb-3 p-2 bg-muted/30 rounded-md border flex items-center gap-2 text-xs text-blue-600">
-          <div className="h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-          <span>Analyzing alignment...</span>
-        </div>
-      )}
-
-      {/* BlockNote Editor Container - with relative positioning for overlay */}
-      <div className="relative min-h-[200px]">
-        {/* Writing Preview Overlay - rendered ABOVE the editor when active */}
-        {activePreview && activePreview.affectedRootIntentIds?.includes(intent.id) && (
-          <WritingPreviewOverlay
-            activePreview={activePreview}
-            selectedOption={previewSelectedOption}
-            intentId={intent.id}
-            currentContent={editorContent}
-          />
         )}
 
-        {/* BlockNote Editor - hidden when preview is active */}
-        <div
-          ref={editorWrapperRef}
-          className={`blocknote-editor-wrapper ${
-            activePreview && activePreview.affectedRootIntentIds?.includes(intent.id)
-              ? "invisible"
-              : ""
-          }`}
-          onFocus={() => {
-            if (onActiveWritingBlockChange) {
-              onActiveWritingBlockChange(intent.id);
-            }
-          }}
-          onBlur={() => {
-            if (onActiveWritingBlockChange) {
-              onActiveWritingBlockChange(null);
-            }
-          }}
-        >
-          {!provider ? (
-            <div className="p-4 text-sm text-muted-foreground">
-              Failed to initialize editor. Please refresh the page.
-            </div>
-          ) : !isSynced ? (
-            <div className="p-4 flex items-center gap-2 text-sm text-muted-foreground">
-              <div className="h-4 w-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
-              <span>Loading content...</span>
-            </div>
-          ) : (
-            <BlockNoteView editor={editor} theme="light" formattingToolbar={true} />
-          )}
-
-          {/* Alignment Overlay - rendered on top when showAlignment is true */}
-          {renderAlignmentOverlay}
+        {/* Alignment Controls */}
+        <div className="flex flex-col gap-1.5 text-xs">
+          <label className="flex items-center gap-1.5 cursor-pointer hover:text-primary transition-colors">
+            <input
+              type="checkbox"
+              checked={showAlignment}
+              onChange={(e) => {
+                const isChecked = e.target.checked;
+                setShowAlignment(isChecked);
+              }}
+              className="w-3.5 h-3.5 cursor-pointer"
+            />
+            <span className="text-muted-foreground">Show alignment</span>
+          </label>
+          <Button
+            onClick={handleManualCheck}
+            disabled={isCheckingAlignment}
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-xs w-fit"
+          >
+            {isCheckingAlignment ? 'Checking...' : 'Check now'}
+          </Button>
         </div>
+
+        {/* Alignment Check Status */}
+        {isCheckingAlignment && (
+          <div className="p-2 bg-muted/30 rounded-md border flex items-center gap-2 text-xs text-blue-600">
+            <div className="h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            <span>Analyzing...</span>
+          </div>
+        )}
       </div>
 
+      {/* Right Panel: Editor + Last Updated */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* BlockNote Editor Container - with relative positioning for overlay */}
+        <div className="relative min-h-[200px] flex-1">
+          {/* Writing Preview Overlay - rendered ABOVE the editor when active */}
+          {activePreview && activePreview.affectedRootIntentIds?.includes(intent.id) && (
+            <WritingPreviewOverlay
+              activePreview={activePreview}
+              selectedOption={previewSelectedOption}
+              intentId={intent.id}
+              currentContent={editorContent}
+            />
+          )}
 
-      {/* Footer: last updated - only render on client to avoid hydration error */}
-      <div className="mt-2 text-[10px] text-muted-foreground text-right">
-        {mounted ? new Date(writingBlock.updatedAt).toLocaleTimeString() : '\u00A0'}
+          {/* BlockNote Editor - hidden when preview is active */}
+          <div
+            ref={editorWrapperRef}
+            className={`blocknote-editor-wrapper ${
+              activePreview && activePreview.affectedRootIntentIds?.includes(intent.id)
+                ? "invisible"
+                : ""
+            }`}
+            onFocus={() => {
+              if (onActiveWritingBlockChange) {
+                onActiveWritingBlockChange(intent.id);
+              }
+            }}
+            onBlur={() => {
+              if (onActiveWritingBlockChange) {
+                onActiveWritingBlockChange(null);
+              }
+            }}
+          >
+            {!provider ? (
+              <div className="p-4 text-sm text-muted-foreground">
+                Failed to initialize editor. Please refresh the page.
+              </div>
+            ) : !isSynced ? (
+              <div className="p-4 flex items-center gap-2 text-sm text-muted-foreground">
+                <div className="h-4 w-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
+                <span>Loading content...</span>
+              </div>
+            ) : (
+              <BlockNoteView editor={editor} theme="light" formattingToolbar={true} />
+            )}
+
+            {/* Alignment Overlay - rendered on top when showAlignment is true */}
+            {renderAlignmentOverlay}
+          </div>
+        </div>
+
+        {/* Footer: last updated - only render on client to avoid hydration error */}
+        <div className="mt-2 text-[10px] text-muted-foreground text-right">
+          {mounted ? new Date(writingBlock.updatedAt).toLocaleTimeString() : '\u00A0'}
+        </div>
       </div>
 
       {/* Floating Help Button - appears when text is selected */}

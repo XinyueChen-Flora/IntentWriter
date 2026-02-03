@@ -611,7 +611,6 @@ export default function CollaborativeEditor({
     // Apply each change to the corresponding intent block
     changes?.forEach(change => {
       if (change.changeType === "modified" && change.previewText) {
-        // Find the intent block and update its content
         const intentBlock = intentBlocks.find(b => b.id === change.intentId);
         if (intentBlock) {
           updateIntentBlockRaw(change.intentId, {
@@ -619,8 +618,22 @@ export default function CollaborativeEditor({
             updatedAt: Date.now(),
           });
         }
+      } else if (change.changeType === "added" && change.previewText) {
+        // Add a new intent block
+        const newBlock: IntentBlock = {
+          id: `intent-${Date.now()}-${Math.random()}`,
+          content: change.previewText,
+          position: intentBlocks.length,
+          linkedWritingIds: [],
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          parentId: null,
+          level: 0,
+        };
+        addIntentBlockRaw(newBlock);
+      } else if (change.changeType === "removed") {
+        deleteIntentBlockRaw(change.intentId);
       }
-      // TODO: Handle "added" and "removed" change types if needed
     });
 
     // Mark the help request as resolved
@@ -633,7 +646,7 @@ export default function CollaborativeEditor({
 
     // Clear the preview
     handleClearPreview();
-  }, [activePreview, activeHelpRequest, intentBlocks, updateIntentBlockRaw, updateHelpRequest, handleClearPreview]);
+  }, [activePreview, activeHelpRequest, intentBlocks, updateIntentBlockRaw, addIntentBlockRaw, deleteIntentBlockRaw, updateHelpRequest, handleClearPreview]);
 
   // Handle starting a team discussion
   const handleStartTeamDiscussion = useCallback((discussion: {
@@ -662,12 +675,6 @@ export default function CollaborativeEditor({
 
     // Clear the local preview state (the discussion is now stored in the HelpRequest)
     handleClearPreview();
-
-    console.log("[Team Discussion] Started:", {
-      helpRequestId: activeHelpRequest.id,
-      participationType: discussion.participationType,
-      requiredResponders: discussion.requiredResponders,
-    });
   }, [activeHelpRequest, activePreview, updateHelpRequest, handleClearPreview]);
 
   // Handle responding to a team discussion
@@ -677,6 +684,10 @@ export default function CollaborativeEditor({
   }) => {
     const helpRequest = state.helpRequests.find(hr => hr.id === requestId);
     if (!helpRequest || !helpRequest.teamDiscussion) return;
+
+    // Prevent duplicate responses from the same user
+    const alreadyResponded = helpRequest.teamDiscussion.responses?.some(r => r.userId === user.id);
+    if (alreadyResponded) return;
 
     const newResponse = {
       userId: user.id,
@@ -697,11 +708,6 @@ export default function CollaborativeEditor({
         ...helpRequest.teamDiscussion,
         responses: updatedResponses,
       },
-    });
-
-    console.log("[Team Discussion] Response submitted:", {
-      helpRequestId: requestId,
-      response: newResponse,
     });
   }, [state.helpRequests, user, updateHelpRequest]);
 
@@ -727,6 +733,20 @@ export default function CollaborativeEditor({
               updatedAt: Date.now(),
             });
           }
+        } else if (change.changeType === "added" && change.previewText) {
+          const newBlock: IntentBlock = {
+            id: `intent-${Date.now()}-${Math.random()}`,
+            content: change.previewText,
+            position: intentBlocks.length,
+            linkedWritingIds: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            parentId: null,
+            level: 0,
+          };
+          addIntentBlockRaw(newBlock);
+        } else if (change.changeType === "removed") {
+          deleteIntentBlockRaw(change.intentId);
         }
       });
     }
@@ -741,12 +761,7 @@ export default function CollaborativeEditor({
         resolvedOption: option,
       },
     });
-
-    console.log("[Team Discussion] Resolved:", {
-      helpRequestId: requestId,
-      resolvedOption: option,
-    });
-  }, [state.helpRequests, user.id, intentBlocks, updateIntentBlockRaw, updateHelpRequest]);
+  }, [state.helpRequests, user.id, intentBlocks, updateIntentBlockRaw, addIntentBlockRaw, deleteIntentBlockRaw, updateHelpRequest]);
 
   // Handle canceling a team discussion (initiator only)
   const handleCancelDiscussion = useCallback((requestId: string) => {
@@ -757,10 +772,8 @@ export default function CollaborativeEditor({
     // Reset back to previewing state (or delete the request)
     updateHelpRequest(requestId, {
       status: 'resolved', // Mark as resolved but without applying
-      teamDiscussion: undefined, // Clear team discussion data
+      teamDiscussion: null as any, // Clear team discussion data (use null so it survives JSON serialization)
     });
-
-    console.log("[Team Discussion] Canceled:", { helpRequestId: requestId });
   }, [state.helpRequests, user.id, updateHelpRequest]);
 
   // Handle viewing a discussion's preview (opens it in Intent/Writing panels)
@@ -771,11 +784,6 @@ export default function CollaborativeEditor({
     setActivePreview(helpRequest.impactPreview);
     setActiveHelpRequest(helpRequest);
     setPreviewSelectedOption(helpRequest.selectedOption || null);
-
-    console.log("[Team Discussion] Viewing preview:", {
-      helpRequestId: helpRequest.id,
-      question: helpRequest.question,
-    });
   }, []);
 
   // Handle panel resize

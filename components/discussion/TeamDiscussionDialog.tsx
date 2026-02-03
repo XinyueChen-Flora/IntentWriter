@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { X, Users, Vote, MessageSquare, Play, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { ImpactPreview, HelpRequest, IntentBlock } from "@/lib/partykit";
+import type { ImpactPreview, HelpRequest, IntentBlock, SectionPreview, ParagraphPreview } from "@/lib/partykit";
 import UserAvatar from "@/components/user/UserAvatar";
 
 // Participation types for team discussion
@@ -56,12 +56,12 @@ export default function TeamDiscussionDialog({
       assigneeEmail?: string;
       isCurrentUser: boolean;
       optionA: {
-        intentChange: any;
-        writingPreview: any;
+        intentChange: SectionPreview | undefined;
+        writingPreview: ParagraphPreview | undefined;
       };
       optionB: {
-        intentChange: any;
-        writingPreview: any;
+        intentChange: SectionPreview | undefined;
+        writingPreview: ParagraphPreview | undefined;
       };
     }> = [];
 
@@ -102,7 +102,7 @@ export default function TeamDiscussionDialog({
   }, [preview, intentBlocks, currentUserId]);
 
   // Auto-select affected assignees as required responders
-  useMemo(() => {
+  useEffect(() => {
     const affected = new Set<string>();
     affectedSections.forEach(section => {
       if (section.assigneeId && section.assigneeId !== currentUserId) {
@@ -133,16 +133,6 @@ export default function TeamDiscussionDialog({
       id,
       ...info,
     }));
-
-    // Debug log
-    console.log("[TeamDiscussionDialog] Current user:", currentUserId);
-    console.log("[TeamDiscussionDialog] All assignees (other users):", result);
-    console.log("[TeamDiscussionDialog] Intent blocks with assignees:", intentBlocks.filter(i => i.assignee).map(i => ({
-      id: i.id,
-      content: i.content?.substring(0, 30),
-      assignee: i.assignee,
-      assigneeName: i.assigneeName,
-    })));
 
     return result;
   }, [intentBlocks, currentUserId, affectedSections]);

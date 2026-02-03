@@ -372,15 +372,6 @@ Here's what our team agreed on and what each section currently looks like:
     // Determine if team discussion is needed (affects multiple root intents)
     const needsTeamDiscussion = result.needsTeamDiscussion ?? (affectedRootIntentIds.length > 1);
 
-    console.log("[Generate Impact Preview] Result:", {
-      primaryIntentId: result.primaryIntentId,
-      affectedRootIntentIds,
-      needsTeamDiscussion,
-      reasoning: result.reasoning,
-      optionA_paragraphPreviews: result.optionA?.paragraphPreviews,
-      optionB_paragraphPreviews: result.optionB?.paragraphPreviews,
-    });
-
     return {
       questionType,
       optionA: result.optionA || { label: "Keep Current", intentChanges: [], paragraphPreviews: [] },
