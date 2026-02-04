@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,8 @@ export default function RegisterPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirect = searchParams.get("redirect");
   const supabase = createClient();
 
   const handleRegister = async (e: React.FormEvent) => {
@@ -38,7 +40,7 @@ export default function RegisterPage() {
       if (error) throw error;
 
       if (data.user) {
-        router.push("/dashboard");
+        router.push(redirect || "/dashboard");
         router.refresh();
       }
     } catch (err: any) {
@@ -51,10 +53,13 @@ export default function RegisterPage() {
   const handleGoogleSignup = async () => {
     setError(null);
     try {
+      const callbackUrl = redirect
+        ? `${window.location.origin}/auth/callback?redirect=${encodeURIComponent(redirect)}`
+        : `${window.location.origin}/auth/callback`;
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: callbackUrl,
         },
       });
       if (error) throw error;

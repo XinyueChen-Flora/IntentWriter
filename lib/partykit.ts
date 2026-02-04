@@ -2,9 +2,7 @@
 
 import { useState, useCallback } from "react";
 import usePartySocket from "partysocket/react";
-import type { AACUDimension } from "./aacuFramework";
 
-// Define types for your storage
 export type WritingBlock = {
   id: string;
   content: string;
@@ -12,7 +10,6 @@ export type WritingBlock = {
   linkedIntentId: string | null;
   createdAt: number;
   updatedAt: number;
-  alignmentResult?: any; // Stores the AI alignment analysis result
 };
 
 export type IntentBlock = {
@@ -22,152 +19,44 @@ export type IntentBlock = {
   linkedWritingIds: string[];
   createdAt: number;
   updatedAt: number;
-  // Hierarchical structure support
-  parentId: string | null; // null = root level
-  level: number; // 0 = root, 1 = child, 2 = grandchild, etc.
-  intentTag?: string; // Content after [intent]: marker
-  intentCreatedBy?: string; // User ID who created the intent
-  intentCreatedByName?: string; // User name who created the intent
-  intentCreatedByEmail?: string; // User email who created the intent
-  intentCreatedAt?: number; // When the intent was created
-  isCollapsed?: boolean; // UI state for collapsible hierarchy
-  assignee?: string; // User ID assigned to this block
-  assigneeName?: string; // Assignee user name
-  assigneeEmail?: string; // Assignee user email
-  mergeWritingFrom?: string; // Writing block ID to merge content from (used when indent happens)
+  parentId: string | null;
+  level: number;
+  intentTag?: string;
+  intentCreatedBy?: string;
+  intentCreatedByName?: string;
+  intentCreatedByEmail?: string;
+  intentCreatedAt?: number;
+  isCollapsed?: boolean;
+  assignee?: string;
+  assigneeName?: string;
+  assigneeEmail?: string;
+  mergeWritingFrom?: string;
 };
 
-export type EditingTraceEntry = {
-  version: number; // 1, 2, 3...
-  content: string; // The text at this version
-  timestamp: number;
+export type RoomMeta = {
+  phase: 'setup' | 'writing';
+  baselineVersion: number;
+  phaseTransitionAt?: number;
+  phaseTransitionBy?: string;
 };
 
-export type RuleBlock = {
+export type IntentDependency = {
   id: string;
-  content: string; // Rule description (e.g., "Use 'shared understanding' as core concept")
-  examples: string[]; // Writing examples demonstrating this rule
-  editingTrace: EditingTraceEntry[]; // Editing history showing how the rule emerged
-  rationale: string; // Why this rule is important
-  createdBy: string; // User ID
-  createdByName?: string;
-  createdByEmail?: string;
+  fromIntentId: string;
+  toIntentId: string;
+  label: string;
+  direction: 'directed' | 'bidirectional';
+  source: 'manual' | 'ai-suggested' | 'ai-confirmed';
+  confirmed: boolean;
+  createdBy?: string;
   createdAt: number;
-  updatedAt: number;
-  position: number; // For ordering
-  dimension?: AACUDimension; // AAC&U dimension category (optional)
-  sourceRubric?: string; // Original rubric text that generated this rule (optional)
-};
-
-// Section preview for impact visualization
-export type SectionPreview = {
-  intentId: string;
-  intentContent: string;
-  originalText?: string;  // Current text (if exists)
-  previewText: string;    // How it would look with this option
-  changeType: "added" | "removed" | "modified" | "unchanged";
-};
-
-// Paragraph preview - shows how a paragraph would change
-export type ParagraphPreview = {
-  intentId: string;          // Root intent ID (level 0)
-  intentContent: string;     // Root intent content
-  currentContent: string;    // Current paragraph content
-  previewContent: string;    // How it would change
-  changeType: "modified" | "unchanged";
-  reason?: string;           // Why this paragraph is affected
-};
-
-// Impact preview - stored with HelpRequest for team negotiation
-export type ImpactPreview = {
-  questionType: string;  // "choose-between" | "add-remove" | "how-much" | etc.
-
-  // Option A preview - "Keep Current" (the existing approach)
-  optionA: {
-    label: string;
-    isCurrentState?: boolean;  // true = this represents current state
-    intentChanges: SectionPreview[];      // Changes to intent structure
-    paragraphPreviews: ParagraphPreview[]; // Changes to paragraphs
-  };
-
-  // Option B preview - "Make Change" (the proposed modification)
-  optionB: {
-    label: string;
-    isCurrentState?: boolean;  // false = this represents the proposed change
-    intentChanges: SectionPreview[];
-    paragraphPreviews: ParagraphPreview[];
-  };
-
-  primaryIntentId?: string;  // The main intent this question is about
-  affectedIntentIds?: string[];  // All intents that might be affected
-  affectedRootIntentIds?: string[];  // Only level-0 intents affected
-  needsTeamDiscussion?: boolean;  // True if changes affect multiple root intents
-  generatedAt: number;
-};
-
-// Help Request - for writer to articulate uncertainty/questions during writing
-export type HelpRequest = {
-  id: string;
-  createdBy: string;
-  createdByName?: string;
-  createdByEmail?: string;
-  createdAt: number;
-
-  // The question/uncertainty
-  question: string;
-  questionType?: string;  // "choose-between" | "add-remove" | "how-much" | etc.
-  tags?: string[];
-
-  // Context - where this was raised
-  writingBlockId: string;
-  intentBlockId?: string; // Auto-linked via alignment
-  selectedText?: string;
-  selectionRange?: {
-    from: number;
-    to: number;
-  };
-
-  // AI judgment result
-  aiJudgment?: {
-    isTeamRelevant: boolean;
-    affectedIntents?: string[]; // Intent IDs that may be affected
-    reason: string;
-  };
-
-  // Impact preview - for visualization and team negotiation
-  impactPreview?: ImpactPreview;
-
-  // User's selected option (after viewing preview)
-  selectedOption?: "A" | "B";
-
-  // Team discussion data (when status = 'team')
-  teamDiscussion?: {
-    participationType: "vote" | "feedback" | "execute" | "tentative";
-    initiatorThoughts: string;  // What the initiator thinks/wants to discuss
-    selectedOption: "A" | "B" | null;  // Option chosen by initiator (for execute/tentative)
-    requiredResponders: string[];  // User IDs who must respond
-    optionalResponders: string[];  // User IDs who can optionally respond
-    responses: Array<{
-      userId: string;
-      userName?: string;
-      userEmail?: string;
-      vote?: "A" | "B";  // For vote type
-      comment?: string;  // For feedback/comment
-      respondedAt: number;
-    }>;
-    resolvedAt?: number;
-    resolvedOption?: "A" | "B";
-  };
-
-  // Status flow: pending -> ai_processing -> previewing -> personal/team -> resolved
-  status: 'pending' | 'ai_processing' | 'previewing' | 'personal' | 'team' | 'resolved';
 };
 
 export type RoomState = {
   writingBlocks: WritingBlock[];
   intentBlocks: IntentBlock[];
-  ruleBlocks: RuleBlock[];
-  helpRequests: HelpRequest[];
+  roomMeta: RoomMeta;
+  dependencies: IntentDependency[];
 };
 
 export type OnlineUser = {
@@ -184,8 +73,8 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
   const [state, setState] = useState<RoomState>({
     writingBlocks: [],
     intentBlocks: [],
-    ruleBlocks: [],
-    helpRequests: [],
+    roomMeta: { phase: 'setup', baselineVersion: 0 },
+    dependencies: [],
   });
   const [isConnected, setIsConnected] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
@@ -197,7 +86,6 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
     onOpen() {
       setIsConnected(true);
 
-      // Send user identification to server
       if (user) {
         const userName = user.user_metadata?.name || user.user_metadata?.full_name || user.email?.split('@')[0] || 'Anonymous';
         const avatarUrl = user.user_metadata?.avatar_url;
@@ -216,7 +104,6 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
       setIsConnected(false);
     },
     onMessage(event: MessageEvent) {
-      // Skip binary messages (Yjs uses binary protocol)
       if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
         return;
       }
@@ -235,10 +122,7 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
             const index = prev.intentBlocks.findIndex((b) => b.id === data.blockId);
             if (index === -1) return prev;
             const newBlocks = [...prev.intentBlocks];
-            newBlocks[index] = {
-              ...newBlocks[index],
-              ...data.updates,
-            };
+            newBlocks[index] = { ...newBlocks[index], ...data.updates };
             return { ...prev, intentBlocks: newBlocks };
           });
           break;
@@ -252,6 +136,9 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
           setState((prev) => ({
             ...prev,
             intentBlocks: prev.intentBlocks.filter((b) => b.id !== data.blockId),
+            dependencies: prev.dependencies.filter(
+              (d) => d.fromIntentId !== data.blockId && d.toIntentId !== data.blockId
+            ),
           }));
           break;
         case "add_writing_block":
@@ -271,59 +158,35 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
             const index = prev.writingBlocks.findIndex((b) => b.id === data.blockId);
             if (index === -1) return prev;
             const newBlocks = [...prev.writingBlocks];
-            newBlocks[index] = {
-              ...newBlocks[index],
-              ...data.updates,
-            };
+            newBlocks[index] = { ...newBlocks[index], ...data.updates };
             return { ...prev, writingBlocks: newBlocks };
           });
           break;
-        case "add_rule_block":
+        case "update_room_meta":
           setState((prev) => ({
             ...prev,
-            ruleBlocks: [...prev.ruleBlocks, data.block],
+            roomMeta: { ...prev.roomMeta, ...data.updates },
           }));
           break;
-        case "update_rule_block":
+        case "add_dependency":
+          setState((prev) => ({
+            ...prev,
+            dependencies: [...prev.dependencies, data.dependency],
+          }));
+          break;
+        case "update_dependency":
           setState((prev) => {
-            const index = prev.ruleBlocks.findIndex((b) => b.id === data.blockId);
+            const index = prev.dependencies.findIndex((d) => d.id === data.dependencyId);
             if (index === -1) return prev;
-            const newBlocks = [...prev.ruleBlocks];
-            newBlocks[index] = {
-              ...newBlocks[index],
-              ...data.updates,
-            };
-            return { ...prev, ruleBlocks: newBlocks };
+            const newDeps = [...prev.dependencies];
+            newDeps[index] = { ...newDeps[index], ...data.updates };
+            return { ...prev, dependencies: newDeps };
           });
           break;
-        case "delete_rule_block":
+        case "delete_dependency":
           setState((prev) => ({
             ...prev,
-            ruleBlocks: prev.ruleBlocks.filter((b) => b.id !== data.blockId),
-          }));
-          break;
-        case "add_help_request":
-          setState((prev) => ({
-            ...prev,
-            helpRequests: [...prev.helpRequests, data.request],
-          }));
-          break;
-        case "update_help_request":
-          setState((prev) => {
-            const index = prev.helpRequests.findIndex((r) => r.id === data.requestId);
-            if (index === -1) return prev;
-            const newRequests = [...prev.helpRequests];
-            newRequests[index] = {
-              ...newRequests[index],
-              ...data.updates,
-            };
-            return { ...prev, helpRequests: newRequests };
-          });
-          break;
-        case "delete_help_request":
-          setState((prev) => ({
-            ...prev,
-            helpRequests: prev.helpRequests.filter((r) => r.id !== data.requestId),
+            dependencies: prev.dependencies.filter((d) => d.id !== data.dependencyId),
           }));
           break;
       }
@@ -334,24 +197,12 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
   const updateIntentBlock = useCallback(
     (blockId: string, updates: Partial<IntentBlock>) => {
       if (!socket) return;
-
-      socket.send(
-        JSON.stringify({
-          type: "update_intent_block",
-          blockId,
-          updates,
-        })
-      );
-
-      // Optimistic update
+      socket.send(JSON.stringify({ type: "update_intent_block", blockId, updates }));
       setState((prev) => {
         const index = prev.intentBlocks.findIndex((b) => b.id === blockId);
         if (index === -1) return prev;
         const newBlocks = [...prev.intentBlocks];
-        newBlocks[index] = {
-          ...newBlocks[index],
-          ...updates,
-        };
+        newBlocks[index] = { ...newBlocks[index], ...updates };
         return { ...prev, intentBlocks: newBlocks };
       });
     },
@@ -361,17 +212,8 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
   const addIntentBlock = useCallback(
     (block: IntentBlock) => {
       if (!socket) return;
-      socket.send(
-        JSON.stringify({
-          type: "add_intent_block",
-          block,
-        })
-      );
-      // Optimistic update
-      setState((prev) => ({
-        ...prev,
-        intentBlocks: [...prev.intentBlocks, block],
-      }));
+      socket.send(JSON.stringify({ type: "add_intent_block", block }));
+      setState((prev) => ({ ...prev, intentBlocks: [...prev.intentBlocks, block] }));
     },
     [socket]
   );
@@ -379,13 +221,7 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
   const deleteIntentBlock = useCallback(
     (blockId: string) => {
       if (!socket) return;
-      socket.send(
-        JSON.stringify({
-          type: "delete_intent_block",
-          blockId,
-        })
-      );
-      // Optimistic update
+      socket.send(JSON.stringify({ type: "delete_intent_block", blockId }));
       setState((prev) => ({
         ...prev,
         intentBlocks: prev.intentBlocks.filter((b) => b.id !== blockId),
@@ -397,17 +233,8 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
   const addWritingBlock = useCallback(
     (block: WritingBlock) => {
       if (!socket) return;
-      socket.send(
-        JSON.stringify({
-          type: "add_writing_block",
-          block,
-        })
-      );
-      // Optimistic update
-      setState((prev) => ({
-        ...prev,
-        writingBlocks: [...prev.writingBlocks, block],
-      }));
+      socket.send(JSON.stringify({ type: "add_writing_block", block }));
+      setState((prev) => ({ ...prev, writingBlocks: [...prev.writingBlocks, block] }));
     },
     [socket]
   );
@@ -415,13 +242,7 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
   const deleteWritingBlock = useCallback(
     (blockId: string) => {
       if (!socket) return;
-      socket.send(
-        JSON.stringify({
-          type: "delete_writing_block",
-          blockId,
-        })
-      );
-      // Optimistic update
+      socket.send(JSON.stringify({ type: "delete_writing_block", blockId }));
       setState((prev) => ({
         ...prev,
         writingBlocks: prev.writingBlocks.filter((b) => b.id !== blockId),
@@ -430,150 +251,46 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
     [socket]
   );
 
-  const updateWritingBlock = useCallback(
-    (blockId: string, updates: Partial<WritingBlock>) => {
+  // Room meta — NO optimistic update, wait for server broadcast
+  const updateRoomMeta = useCallback(
+    (updates: Partial<RoomMeta>) => {
       if (!socket) return;
+      socket.send(JSON.stringify({ type: "update_room_meta", updates }));
+    },
+    [socket]
+  );
 
-      socket.send(
-        JSON.stringify({
-          type: "update_writing_block",
-          blockId,
-          updates,
-        })
-      );
+  const addDependency = useCallback(
+    (dependency: IntentDependency) => {
+      if (!socket) return;
+      socket.send(JSON.stringify({ type: "add_dependency", dependency }));
+      setState((prev) => ({ ...prev, dependencies: [...prev.dependencies, dependency] }));
+    },
+    [socket]
+  );
 
-      // Optimistic update
+  const updateDependency = useCallback(
+    (dependencyId: string, updates: Partial<IntentDependency>) => {
+      if (!socket) return;
+      socket.send(JSON.stringify({ type: "update_dependency", dependencyId, updates }));
       setState((prev) => {
-        const index = prev.writingBlocks.findIndex((b) => b.id === blockId);
+        const index = prev.dependencies.findIndex((d) => d.id === dependencyId);
         if (index === -1) return prev;
-        const newBlocks = [...prev.writingBlocks];
-        newBlocks[index] = {
-          ...newBlocks[index],
-          ...updates,
-        };
-        return { ...prev, writingBlocks: newBlocks };
+        const newDeps = [...prev.dependencies];
+        newDeps[index] = { ...newDeps[index], ...updates };
+        return { ...prev, dependencies: newDeps };
       });
     },
     [socket]
   );
 
-  const addRuleBlock = useCallback(
-    (block: RuleBlock) => {
+  const deleteDependency = useCallback(
+    (dependencyId: string) => {
       if (!socket) return;
-      socket.send(
-        JSON.stringify({
-          type: "add_rule_block",
-          block,
-        })
-      );
-      // Optimistic update
+      socket.send(JSON.stringify({ type: "delete_dependency", dependencyId }));
       setState((prev) => ({
         ...prev,
-        ruleBlocks: [...prev.ruleBlocks, block],
-      }));
-    },
-    [socket]
-  );
-
-  const updateRuleBlock = useCallback(
-    (blockId: string, updates: Partial<RuleBlock>) => {
-      if (!socket) return;
-      socket.send(
-        JSON.stringify({
-          type: "update_rule_block",
-          blockId,
-          updates,
-        })
-      );
-      // Optimistic update
-      setState((prev) => {
-        const index = prev.ruleBlocks.findIndex((b) => b.id === blockId);
-        if (index === -1) return prev;
-        const newBlocks = [...prev.ruleBlocks];
-        newBlocks[index] = {
-          ...newBlocks[index],
-          ...updates,
-        };
-        return { ...prev, ruleBlocks: newBlocks };
-      });
-    },
-    [socket]
-  );
-
-  const deleteRuleBlock = useCallback(
-    (blockId: string) => {
-      if (!socket) return;
-      socket.send(
-        JSON.stringify({
-          type: "delete_rule_block",
-          blockId,
-        })
-      );
-      // Optimistic update
-      setState((prev) => ({
-        ...prev,
-        ruleBlocks: prev.ruleBlocks.filter((b) => b.id !== blockId),
-      }));
-    },
-    [socket]
-  );
-
-  const addHelpRequest = useCallback(
-    (request: HelpRequest) => {
-      if (!socket) return;
-      socket.send(
-        JSON.stringify({
-          type: "add_help_request",
-          request,
-        })
-      );
-      // Optimistic update
-      setState((prev) => ({
-        ...prev,
-        helpRequests: [...prev.helpRequests, request],
-      }));
-    },
-    [socket]
-  );
-
-  const updateHelpRequest = useCallback(
-    (requestId: string, updates: Partial<HelpRequest>) => {
-      if (!socket) return;
-      socket.send(
-        JSON.stringify({
-          type: "update_help_request",
-          requestId,
-          updates,
-        })
-      );
-      // Optimistic update
-      setState((prev) => {
-        const index = prev.helpRequests.findIndex((r) => r.id === requestId);
-        if (index === -1) return prev;
-        const newRequests = [...prev.helpRequests];
-        newRequests[index] = {
-          ...newRequests[index],
-          ...updates,
-        };
-        return { ...prev, helpRequests: newRequests };
-      });
-    },
-    [socket]
-  );
-
-  const deleteHelpRequest = useCallback(
-    (requestId: string) => {
-      if (!socket) return;
-      socket.send(
-        JSON.stringify({
-          type: "delete_help_request",
-          requestId,
-        })
-      );
-      // Optimistic update
-      setState((prev) => ({
-        ...prev,
-        helpRequests: prev.helpRequests.filter((r) => r.id !== requestId),
+        dependencies: prev.dependencies.filter((d) => d.id !== dependencyId),
       }));
     },
     [socket]
@@ -587,13 +304,10 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
     addIntentBlock,
     deleteIntentBlock,
     addWritingBlock,
-    updateWritingBlock,
     deleteWritingBlock,
-    addRuleBlock,
-    updateRuleBlock,
-    deleteRuleBlock,
-    addHelpRequest,
-    updateHelpRequest,
-    deleteHelpRequest,
+    updateRoomMeta,
+    addDependency,
+    updateDependency,
+    deleteDependency,
   };
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import CollaborativeEditor from "@/components/editor/CollaborativeEditor";
+import RoomShell from "@/components/room/RoomShell";
 import type { User } from "@supabase/supabase-js";
 import { Suspense } from "react";
 
@@ -22,7 +22,7 @@ export default function Room({ roomId, user, documentTitle }: RoomProps) {
         </div>
       }
     >
-      <CollaborativeEditor roomId={roomId} user={user} documentTitle={documentTitle} />
+      <RoomShell roomId={roomId} user={user} documentTitle={documentTitle} />
     </Suspense>
   );
 }

@@ -36,9 +36,12 @@ export default async function DashboardPage() {
     collaboratedDocs = data || [];
   }
 
-  // Combine and sort by updated_at
-  const documents = [...(ownedDocs || []), ...collaboratedDocs]
-    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+  // Combine, deduplicate by id, and sort by updated_at
+  const ownedIds = new Set((ownedDocs || []).map((d) => d.id));
+  const documents = [
+    ...(ownedDocs || []),
+    ...collaboratedDocs.filter((d) => !ownedIds.has(d.id)),
+  ].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
 
   // Fetch user's profile
   const { data: profile } = await supabase

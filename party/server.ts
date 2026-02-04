@@ -1,7 +1,6 @@
 import type * as Party from "partykit/server";
 import { onConnect } from "y-partykit";
 
-// Types matching our data structure
 export type WritingBlock = {
   id: string;
   content: string;
@@ -9,7 +8,6 @@ export type WritingBlock = {
   linkedIntentId: string | null;
   createdAt: number;
   updatedAt: number;
-  alignmentResult?: any; // Stores the AI alignment analysis result
 };
 
 export type IntentBlock = {
@@ -33,54 +31,30 @@ export type IntentBlock = {
   mergeWritingFrom?: string;
 };
 
-export type EditingTraceEntry = {
-  version: number;
-  content: string;
-  timestamp: number;
+export type RoomMeta = {
+  phase: 'setup' | 'writing';
+  baselineVersion: number;
+  phaseTransitionAt?: number;
+  phaseTransitionBy?: string;
 };
 
-export type RuleBlock = {
+export type IntentDependency = {
   id: string;
-  content: string;
-  examples: string[];
-  editingTrace: EditingTraceEntry[];
-  rationale: string;
-  createdBy: string;
-  createdByName?: string;
-  createdByEmail?: string;
+  fromIntentId: string;
+  toIntentId: string;
+  label: string;
+  direction: 'directed' | 'bidirectional';
+  source: 'manual' | 'ai-suggested' | 'ai-confirmed';
+  confirmed: boolean;
+  createdBy?: string;
   createdAt: number;
-  updatedAt: number;
-  position: number;
-};
-
-export type HelpRequest = {
-  id: string;
-  createdBy: string;
-  createdByName?: string;
-  createdByEmail?: string;
-  createdAt: number;
-  question: string;
-  tags?: string[];
-  writingBlockId: string;
-  intentBlockId?: string;
-  selectedText?: string;
-  selectionRange?: {
-    from: number;
-    to: number;
-  };
-  aiJudgment?: {
-    isTeamRelevant: boolean;
-    affectedIntents?: string[];
-    reason: string;
-  };
-  status: 'pending' | 'ai_processing' | 'personal' | 'team' | 'resolved';
 };
 
 export type RoomState = {
   writingBlocks: WritingBlock[];
   intentBlocks: IntentBlock[];
-  ruleBlocks: RuleBlock[];
-  helpRequests: HelpRequest[];
+  roomMeta: RoomMeta;
+  dependencies: IntentDependency[];
 };
 
 type OnlineUser = {
@@ -93,12 +67,10 @@ type OnlineUser = {
 };
 
 export default class WritingRoomServer implements Party.Server {
-  // Track online users (metadata connections only)
   onlineUsers: Map<string, OnlineUser> = new Map();
 
   constructor(readonly room: Party.Room) {}
 
-  // Enable CORS for production
   static async onFetch(request: Party.Request, lobby: Party.FetchLobby) {
     return new Response("OK", {
       status: 200,
@@ -111,25 +83,33 @@ export default class WritingRoomServer implements Party.Server {
   }
 
   async onStart() {
-    // Initialize room state if it doesn't exist
     const state = await this.room.storage.get<RoomState>("state");
     if (!state) {
       await this.room.storage.put<RoomState>("state", {
         writingBlocks: [],
         intentBlocks: [],
-        ruleBlocks: [],
-        helpRequests: [],
+        roomMeta: { phase: 'setup', baselineVersion: 0 },
+        dependencies: [],
       });
     } else {
-      // Migration: add missing arrays to existing state
+      // Migration: add missing fields to existing state
       let needsUpdate = false;
-      if (!state.ruleBlocks) {
-        state.ruleBlocks = [];
+      if (!state.roomMeta) {
+        state.roomMeta = { phase: 'setup', baselineVersion: 0 };
         needsUpdate = true;
       }
-      if (!state.helpRequests) {
-        state.helpRequests = [];
+      if (!state.dependencies) {
+        state.dependencies = [];
         needsUpdate = true;
+      }
+      // Migrate old type-based deps to label-based
+      for (const dep of state.dependencies) {
+        if ((dep as any).type && !dep.label) {
+          dep.label = (dep as any).type;
+          dep.direction = 'directed';
+          delete (dep as any).type;
+          needsUpdate = true;
+        }
       }
       if (needsUpdate) {
         await this.room.storage.put("state", state);
@@ -139,41 +119,29 @@ export default class WritingRoomServer implements Party.Server {
 
   async onConnect(conn: Party.Connection, ctx: Party.ConnectionContext) {
     const url = new URL(ctx.request.url);
-
-    // Check if this is a Yjs connection (for BlockNote editors)
-    // Yjs connections have room ID pattern: roomId-writing-blockId
     const isYjsConnection = url.pathname.includes("-writing-");
 
     if (isYjsConnection) {
-      // Handle Yjs connections for BlockNote
       return onConnect(conn, this.room, {
-        persist: {
-          mode: "snapshot"  // Stores latest document state between sessions
-        },
+        persist: { mode: "snapshot" },
       });
     }
 
-    // This is a metadata connection (intent/writing blocks)
-    // Send current state to the newly connected client
     const state = await this.room.storage.get<RoomState>("state");
-
     conn.send(
       JSON.stringify({
         type: "sync",
         state: state || {
           writingBlocks: [],
           intentBlocks: [],
-          ruleBlocks: [],
-          helpRequests: [],
+          roomMeta: { phase: 'setup', baselineVersion: 0 },
+          dependencies: [],
         },
       })
     );
-
-    // Note: User info will be sent via identify message from client
   }
 
   async onMessage(message: string | ArrayBuffer, sender: Party.Connection) {
-    // Handle binary messages (Yjs)
     if (message instanceof ArrayBuffer) {
       this.room.broadcast(message, [sender.id]);
       return;
@@ -181,10 +149,8 @@ export default class WritingRoomServer implements Party.Server {
 
     const data = JSON.parse(message);
 
-    // Handle different message types
     switch (data.type) {
       case "identify": {
-        // Client sends user info on connection
         const user: OnlineUser = {
           connectionId: sender.id,
           userId: data.userId,
@@ -193,34 +159,19 @@ export default class WritingRoomServer implements Party.Server {
           avatarUrl: data.avatarUrl,
           joinedAt: Date.now(),
         };
-
         this.onlineUsers.set(sender.id, user);
-
-        // Broadcast updated user list to all clients
         const userList = Array.from(this.onlineUsers.values());
-        this.room.broadcast(
-          JSON.stringify({
-            type: "online_users",
-            users: userList,
-          })
-        );
+        this.room.broadcast(JSON.stringify({ type: "online_users", users: userList }));
         break;
       }
 
       case "update_intent_block": {
         const state = await this.room.storage.get<RoomState>("state");
         if (!state) return;
-
         const index = state.intentBlocks.findIndex((b) => b.id === data.blockId);
-
         if (index !== -1) {
-          state.intentBlocks[index] = {
-            ...state.intentBlocks[index],
-            ...data.updates,
-            updatedAt: Date.now(),
-          };
+          state.intentBlocks[index] = { ...state.intentBlocks[index], ...data.updates, updatedAt: Date.now() };
         }
-
         await this.room.storage.put("state", state);
         this.room.broadcast(message, [sender.id]);
         break;
@@ -229,10 +180,8 @@ export default class WritingRoomServer implements Party.Server {
       case "add_intent_block": {
         const state = await this.room.storage.get<RoomState>("state");
         if (!state) return;
-
         state.intentBlocks.push(data.block);
         await this.room.storage.put("state", state);
-
         this.room.broadcast(message, [sender.id]);
         break;
       }
@@ -240,9 +189,9 @@ export default class WritingRoomServer implements Party.Server {
       case "delete_intent_block": {
         const state = await this.room.storage.get<RoomState>("state");
         if (!state) return;
-
-        state.intentBlocks = state.intentBlocks.filter(
-          (b) => b.id !== data.blockId
+        state.intentBlocks = state.intentBlocks.filter((b) => b.id !== data.blockId);
+        state.dependencies = (state.dependencies || []).filter(
+          (d) => d.fromIntentId !== data.blockId && d.toIntentId !== data.blockId
         );
         await this.room.storage.put("state", state);
         this.room.broadcast(message, [sender.id]);
@@ -252,10 +201,8 @@ export default class WritingRoomServer implements Party.Server {
       case "add_writing_block": {
         const state = await this.room.storage.get<RoomState>("state");
         if (!state) return;
-
         state.writingBlocks.push(data.block);
         await this.room.storage.put("state", state);
-
         this.room.broadcast(message, [sender.id]);
         break;
       }
@@ -263,10 +210,7 @@ export default class WritingRoomServer implements Party.Server {
       case "delete_writing_block": {
         const state = await this.room.storage.get<RoomState>("state");
         if (!state) return;
-
-        state.writingBlocks = state.writingBlocks.filter(
-          (b) => b.id !== data.blockId
-        );
+        state.writingBlocks = state.writingBlocks.filter((b) => b.id !== data.blockId);
         await this.room.storage.put("state", state);
         this.room.broadcast(message, [sender.id]);
         break;
@@ -275,125 +219,66 @@ export default class WritingRoomServer implements Party.Server {
       case "update_writing_block": {
         const state = await this.room.storage.get<RoomState>("state");
         if (!state) return;
-
         const index = state.writingBlocks.findIndex((b) => b.id === data.blockId);
-
         if (index !== -1) {
-          state.writingBlocks[index] = {
-            ...state.writingBlocks[index],
-            ...data.updates,
-            updatedAt: Date.now(),
-          };
+          state.writingBlocks[index] = { ...state.writingBlocks[index], ...data.updates, updatedAt: Date.now() };
         }
-
         await this.room.storage.put("state", state);
         this.room.broadcast(message, [sender.id]);
         break;
       }
 
-      case "add_rule_block": {
+      case "update_room_meta": {
         const state = await this.room.storage.get<RoomState>("state");
         if (!state) return;
+        state.roomMeta = { ...(state.roomMeta || { phase: 'setup', baselineVersion: 0 }), ...data.updates };
+        await this.room.storage.put("state", state);
+        // Broadcast to ALL clients including sender (server is truth for phase transitions)
+        this.room.broadcast(message);
+        break;
+      }
 
-        state.ruleBlocks = state.ruleBlocks || [];
-        state.ruleBlocks.push(data.block);
+      case "add_dependency": {
+        const state = await this.room.storage.get<RoomState>("state");
+        if (!state) return;
+        state.dependencies = state.dependencies || [];
+        state.dependencies.push(data.dependency);
         await this.room.storage.put("state", state);
         this.room.broadcast(message, [sender.id]);
         break;
       }
 
-      case "update_rule_block": {
+      case "update_dependency": {
         const state = await this.room.storage.get<RoomState>("state");
         if (!state) return;
-
-        state.ruleBlocks = state.ruleBlocks || [];
-        const index = state.ruleBlocks.findIndex((b) => b.id === data.blockId);
+        state.dependencies = state.dependencies || [];
+        const index = state.dependencies.findIndex((d) => d.id === data.dependencyId);
         if (index !== -1) {
-          state.ruleBlocks[index] = {
-            ...state.ruleBlocks[index],
-            ...data.updates,
-            updatedAt: Date.now(),
-          };
+          state.dependencies[index] = { ...state.dependencies[index], ...data.updates };
         }
-
         await this.room.storage.put("state", state);
         this.room.broadcast(message, [sender.id]);
         break;
       }
 
-      case "delete_rule_block": {
+      case "delete_dependency": {
         const state = await this.room.storage.get<RoomState>("state");
         if (!state) return;
-
-        state.ruleBlocks = state.ruleBlocks || [];
-        state.ruleBlocks = state.ruleBlocks.filter(
-          (b) => b.id !== data.blockId
-        );
-        await this.room.storage.put("state", state);
-        this.room.broadcast(message, [sender.id]);
-        break;
-      }
-
-      case "add_help_request": {
-        const state = await this.room.storage.get<RoomState>("state");
-        if (!state) return;
-
-        state.helpRequests = state.helpRequests || [];
-        state.helpRequests.push(data.request);
-        await this.room.storage.put("state", state);
-        this.room.broadcast(message, [sender.id]);
-        break;
-      }
-
-      case "update_help_request": {
-        const state = await this.room.storage.get<RoomState>("state");
-        if (!state) return;
-
-        state.helpRequests = state.helpRequests || [];
-        const index = state.helpRequests.findIndex((r) => r.id === data.requestId);
-        if (index !== -1) {
-          state.helpRequests[index] = {
-            ...state.helpRequests[index],
-            ...data.updates,
-          };
-        }
-
-        await this.room.storage.put("state", state);
-        this.room.broadcast(message, [sender.id]);
-        break;
-      }
-
-      case "delete_help_request": {
-        const state = await this.room.storage.get<RoomState>("state");
-        if (!state) return;
-
-        state.helpRequests = state.helpRequests || [];
-        state.helpRequests = state.helpRequests.filter(
-          (r) => r.id !== data.requestId
-        );
+        state.dependencies = (state.dependencies || []).filter((d) => d.id !== data.dependencyId);
         await this.room.storage.put("state", state);
         this.room.broadcast(message, [sender.id]);
         break;
       }
 
       default:
-        // Broadcast any other messages to all clients
         this.room.broadcast(message, [sender.id]);
     }
   }
 
   async onClose(conn: Party.Connection) {
-    // Remove user from online users
     this.onlineUsers.delete(conn.id);
-
-    // Broadcast updated user list
     const userList = Array.from(this.onlineUsers.values());
-    this.room.broadcast(
-      JSON.stringify({
-        type: "online_users",
-        users: userList,
-      })
-    );
+    this.room.broadcast(JSON.stringify({ type: "online_users", users: userList }));
   }
 }
 

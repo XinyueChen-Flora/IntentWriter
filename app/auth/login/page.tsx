@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,8 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirect = searchParams.get("redirect");
   const supabase = createClient();
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -36,8 +38,8 @@ export default function LoginPage() {
       if (error) throw error;
 
       if (data.user) {
-        console.log("[Login] Success! Redirecting to dashboard...");
-        router.push("/dashboard");
+        console.log("[Login] Success! Redirecting...");
+        router.push(redirect || "/dashboard");
         router.refresh();
       }
     } catch (err: any) {
@@ -52,10 +54,13 @@ export default function LoginPage() {
   const handleGoogleLogin = async () => {
     setError(null);
     try {
+      const callbackUrl = redirect
+        ? `${window.location.origin}/auth/callback?redirect=${encodeURIComponent(redirect)}`
+        : `${window.location.origin}/auth/callback`;
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: callbackUrl,
         },
       });
       if (error) throw error;

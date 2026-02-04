@@ -17,8 +17,9 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Check, Copy, Plus, LogIn, Share2, Trash2 } from "lucide-react";
+import { Plus, LogIn, Share2, Trash2 } from "lucide-react";
 import UserAvatar from "@/components/user/UserAvatar";
+import ShareDialog from "@/components/share/ShareDialog";
 
 type Document = {
   id: string;
@@ -53,18 +54,10 @@ export default function DashboardClient({ user, profile, initialDocuments }: Das
   const [joinError, setJoinError] = useState<string | null>(null);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [shareDocId, setShareDocId] = useState("");
-  const [copied, setCopied] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const router = useRouter();
   const supabase = createClient();
-
-  const handleCopyShareLink = (docId: string) => {
-    const shareUrl = `${window.location.origin}/room/${docId}`;
-    navigator.clipboard.writeText(shareUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   const handleShareClick = (docId: string) => {
     setShareDocId(docId);
@@ -93,6 +86,18 @@ export default function DashboardClient({ user, profile, initialDocuments }: Das
       if (error) throw error;
 
       if (data) {
+        // Register the owner as a collaborator with "owner" role
+        const { error: collabError } = await supabase.from("document_collaborators").insert([
+          {
+            document_id: data.id,
+            user_id: user.id,
+            role: "owner",
+          },
+        ]);
+        if (collabError) {
+          console.error("Failed to register owner as collaborator:", collabError);
+        }
+
         setDocuments([data, ...documents]);
         setNewDocTitle("");
         setCreateDialogOpen(false);
@@ -202,8 +207,6 @@ export default function DashboardClient({ user, profile, initialDocuments }: Das
   // Separate owned and collaborated documents
   const ownedDocuments = documents.filter((doc) => doc.owner_id === user.id);
   const collaboratedDocuments = documents.filter((doc) => doc.owner_id !== user.id);
-
-  const shareUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/room/${shareDocId}`;
 
   return (
     <div className="min-h-screen bg-background">
@@ -326,41 +329,12 @@ export default function DashboardClient({ user, profile, initialDocuments }: Das
         </div>
 
         {/* Share Dialog */}
-        <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Share Document</DialogTitle>
-              <DialogDescription>
-                Anyone with this link can join and collaborate
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 mt-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Share Link</label>
-                <div className="flex gap-2">
-                  <Input
-                    value={shareUrl}
-                    readOnly
-                    className="flex-1"
-                    onClick={(e) => e.currentTarget.select()}
-                  />
-                  <Button
-                    variant="outline"
-                    onClick={() => handleCopyShareLink(shareDocId)}
-                  >
-                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  </Button>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Document ID</label>
-                <code className="block p-2 bg-muted rounded text-sm break-all">
-                  {shareDocId}
-                </code>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+        <ShareDialog
+          open={shareDialogOpen}
+          onOpenChange={setShareDialogOpen}
+          documentId={shareDocId}
+          isOwner={true}
+        />
 
         {/* Documents List */}
         <Card>
