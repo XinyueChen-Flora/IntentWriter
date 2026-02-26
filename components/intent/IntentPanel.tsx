@@ -21,6 +21,7 @@ import {
 import { useIntentDragDrop } from './hooks/useIntentDragDrop';
 import { useIntentHierarchy } from './hooks/useIntentHierarchy';
 import { useDependencyLinks } from './hooks/useDependencyLinks';
+import { useDriftDetection } from './hooks/useDriftDetection';
 
 // Import extracted components
 import { SortableBlockItem } from './ui/SortableBlockItem';
@@ -48,6 +49,8 @@ type IntentPanelProps = {
   deleteWritingBlock: (blockId: string) => void;
   updateIntentBlockRaw: (blockId: string, updates: Partial<IntentBlock>) => void;
   onRegisterYjsExporter?: (blockId: string, exporter: () => Uint8Array) => void;
+  markdownExporters?: Map<string, () => Promise<string>>;
+  onRegisterMarkdownExporter?: (blockId: string, exporter: () => Promise<string>) => void;
   ensureWritingBlocksForIntents: () => void;
   roomMeta?: RoomMeta;
   dependencies?: IntentDependency[];
@@ -150,6 +153,8 @@ export default function IntentPanel({
   deleteWritingBlock,
   updateIntentBlockRaw,
   onRegisterYjsExporter,
+  markdownExporters,
+  onRegisterMarkdownExporter,
   ensureWritingBlocksForIntents,
   roomMeta,
   dependencies,
@@ -165,6 +170,35 @@ export default function IntentPanel({
   const [collapsedBlocks, setCollapsedBlocks] = useState<Set<string>>(new Set());
   const [editingBlock, setEditingBlock] = useState<string | null>(null);
   const [hoveredBlock, setHoveredBlock] = useState<string | null>(null);
+  // Hover state for intent-writing linking
+  const [hoveredIntentForLink, setHoveredIntentForLink] = useState<string | null>(null);
+  const [hoveredOrphanHint, setHoveredOrphanHint] = useState<string | null>(null);
+  // Writing → Intent hover (when hovering highlighted sentence in writing)
+  const [hoveredIntentFromWriting, setHoveredIntentFromWriting] = useState<string | null>(null);
+  // Track orphans that have been handled (added to outline or dismissed via "Modify Writing")
+  const [handledOrphanStarts, setHandledOrphanStarts] = useState<Set<string>>(new Set());
+
+  const markOrphanHandled = useCallback((orphanStart: string) => {
+    setHandledOrphanStarts(prev => new Set(prev).add(orphanStart));
+  }, []);
+
+  // Pending writing suggestion (Intent → Writing simulation)
+  const [pendingWritingSuggestion, setPendingWritingSuggestion] = useState<{
+    intentId: string;
+    rootIntentId: string;
+    intentContent: string;
+    suggestedContent: string;
+  } | null>(null);
+
+  // Pending intent suggestion (Writing → Intent simulation)
+  const [pendingIntentSuggestion, setPendingIntentSuggestion] = useState<{
+    intentId: string;
+    rootIntentId: string;
+    currentContent: string;
+    suggestedContent: string;
+    relatedImpacts?: Array<{ id: string; content: string; impact: string }>;
+    isLoadingImpact?: boolean;
+  } | null>(null);
 
   // Refs for SVG dependency lines
   const containerRef = useRef<HTMLDivElement>(null);
@@ -202,6 +236,14 @@ export default function IntentPanel({
     return map;
   }, [writingBlocks]);
 
+  // Drift detection hook
+  const drift = useDriftDetection({
+    blocks,
+    dependencies,
+    markdownExporters: markdownExporters || new Map(),
+    intentToWritingMap,
+  });
+
   const handleAddBlock = () => {
     const newBlock = addBlock();
     setSelectedBlockId(newBlock.id);
@@ -219,6 +261,19 @@ export default function IntentPanel({
       return next;
     });
   }, []);
+
+  // Get writing content for a root intent
+  const getWritingContent = useCallback(async (rootIntentId: string): Promise<string> => {
+    const writingBlock = intentToWritingMap.get(rootIntentId);
+    if (!writingBlock) return '';
+    const exporter = markdownExporters?.get(writingBlock.id);
+    if (!exporter) return '';
+    try {
+      return await exporter();
+    } catch {
+      return '';
+    }
+  }, [intentToWritingMap, markdownExporters]);
 
   const { rootBlocks, blockMap, mergedRenderList } = hierarchy;
 
@@ -281,8 +336,34 @@ export default function IntentPanel({
     deleteWritingBlock,
     updateIntentBlockRaw,
     onRegisterYjsExporter,
+    onRegisterMarkdownExporter,
     blocks,
     registerBlockRef,
+    // Drift detection
+    driftCheckingIds: drift.checkingIds,
+    triggerCheck: drift.triggerCheck,
+    getDriftStatus: drift.getDriftStatus,
+    getSentenceHighlights: drift.getSentenceHighlights,
+    getConflictForDependency: drift.getConflictForDependency,
+    // Hover state for intent-writing linking
+    hoveredIntentForLink,
+    setHoveredIntentForLink,
+    hoveredOrphanHint,
+    setHoveredOrphanHint,
+    hoveredIntentFromWriting,
+    setHoveredIntentFromWriting,
+    // Handled orphans
+    handledOrphanStarts,
+    markOrphanHandled,
+    // Simulated outline
+    getSimulatedOutline: drift.getSimulatedOutline,
+    hasSimulatedOutline: drift.hasSimulatedOutline,
+    // Pending writing suggestion (Intent → Writing)
+    pendingWritingSuggestion,
+    setPendingWritingSuggestion,
+    pendingIntentSuggestion,
+    setPendingIntentSuggestion,
+    getWritingContent,
   }), [
     blockMap, collapsedBlocks, editingBlock, hoveredBlock, selectedBlockId,
     dragDrop.dragOverId, dragDrop.activeId, depLinks.linkMode, isSetupPhase,
@@ -290,8 +371,12 @@ export default function IntentPanel({
     addBlock, updateBlock, deleteBlock, indentBlock, outdentBlock,
     assignBlock, unassignBlock, currentUser, documentMembers, onlineUserIds, userAvatarMap,
     dependencies, addDependency, depLinks.selectedDepId, depLinks.setSelectedDepId, depLinks.hoveredDepId, depLinks.setHoveredDepId, depLinks.depColorMap, intentToWritingMap, roomId, writingBlocks, deleteWritingBlock,
-    updateIntentBlockRaw, onRegisterYjsExporter, blocks, registerBlockRef,
+    updateIntentBlockRaw, onRegisterYjsExporter, onRegisterMarkdownExporter, blocks, registerBlockRef,
+    drift.checkingIds, drift.triggerCheck, drift.getDriftStatus, drift.getSentenceHighlights, drift.getConflictForDependency, drift.getSimulatedOutline, drift.hasSimulatedOutline,
+    hoveredIntentForLink, setHoveredIntentForLink, hoveredOrphanHint, setHoveredOrphanHint, hoveredIntentFromWriting, setHoveredIntentFromWriting,
+    handledOrphanStarts, markOrphanHandled,
     setEditingBlock, setHoveredBlock, setSelectedBlockId,
+    pendingWritingSuggestion, pendingIntentSuggestion, getWritingContent,
   ]);
 
   return (
@@ -310,7 +395,7 @@ export default function IntentPanel({
             <div className={`${isSetupPhase ? 'w-full' : 'w-[30%] flex-shrink-0'} flex items-center justify-between`}>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  {isSetupPhase ? 'Outline Setup' : 'Intent'}
+                  {isSetupPhase ? 'Outline Setup' : 'Outline'}
                 </span>
                 {depLinks.linkMode && (
                   <span className="text-[10px] bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 px-2 py-0.5 rounded-full animate-pulse">
@@ -344,7 +429,21 @@ export default function IntentPanel({
               <>
                 <div className="w-20 flex-shrink-0" />
                 <div className="flex-1 min-w-0 flex items-center justify-between">
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Writing</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Writing</span>
+                    <Button
+                      onClick={() => drift.triggerCheck()}
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      disabled={drift.isChecking}
+                    >
+                      <Sparkles className="h-3 w-3 mr-1" />
+                      {drift.isChecking
+                        ? `Checking (${drift.checkingIds.size})...`
+                        : 'Check Alignment'}
+                    </Button>
+                  </div>
                   {onBackToSetup && (
                     <Button
                       onClick={() => {
@@ -399,7 +498,13 @@ export default function IntentPanel({
                           const midY = (line.y1 + line.y2) / 2;
                           const path = `M ${line.x1} ${line.y1} H ${midX} V ${line.y2} H ${line.x2}`;
                           const isBidi = line.dep.direction === 'bidirectional';
-                          const c = line.color;
+
+                          // Check for conflict on this dependency
+                          const conflict = drift.getConflictForDependency(line.dep.fromIntentId, line.dep.toIntentId);
+                          const hasConflict = !!conflict;
+
+                          // Use red for conflicts, otherwise original color
+                          const c = hasConflict ? '#ef4444' : line.color;
 
                           // Subtle by default, vivid on hover/click
                           const active = sel || hov;
@@ -407,6 +512,7 @@ export default function IntentPanel({
                           const lineOpacity = active
                             ? (isHighlighted ? 1.0 : 0.08)
                             : (line.dashed ? 0.18 : 0.25);
+                          const lineWidth = 2;
 
                           // Arrowhead at "to" end — left-pointing ◀
                           const a = 10; // arrow size
@@ -449,7 +555,7 @@ export default function IntentPanel({
                                 d={path}
                                 fill="none"
                                 stroke={c}
-                                strokeWidth={2}
+                                strokeWidth={lineWidth}
                                 strokeDasharray={line.dashed ? '6 4' : undefined}
                                 opacity={lineOpacity}
                                 strokeLinejoin="round"
@@ -466,14 +572,28 @@ export default function IntentPanel({
                                 y={midY}
                                 fontSize={10}
                                 fill={c}
-                                fontWeight="500"
+                                fontWeight={hasConflict ? '600' : '500'}
                                 textAnchor="start"
                                 dominantBaseline="middle"
                                 opacity={lineOpacity * 0.9}
                               >
-                                {line.dep.label}
+                                {hasConflict ? '⚠ ' : ''}{line.dep.label}
                                 {line.dashed ? ' ✓?' : ''}
                               </text>
+                              {/* Conflict tooltip on hover */}
+                              {hasConflict && isHighlighted && (
+                                <foreignObject
+                                  x={midX + 4}
+                                  y={midY + 12}
+                                  width={200}
+                                  height={60}
+                                  style={{ overflow: 'visible' }}
+                                >
+                                  <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded p-1.5 text-[10px] text-red-700 dark:text-red-300 shadow-sm">
+                                    {conflict.issue}
+                                  </div>
+                                </foreignObject>
+                              )}
                             </g>
                           );
                         })}

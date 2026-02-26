@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useRoom } from "@/lib/partykit";
 import type { User } from "@supabase/supabase-js";
 import IntentPanel from "../intent/IntentPanel";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Share2 } from "lucide-react";
 import ShareDialog from "@/components/share/ShareDialog";
@@ -51,6 +51,15 @@ export default function RoomShell({
   const dependencies = state.dependencies;
 
   const backup = useBackup({ roomId, intentBlocks, writingBlocks, isConnected });
+
+  // Markdown exporter registry for drift detection
+  const markdownExportersRef = useRef<Map<string, () => Promise<string>>>(new Map());
+  const [markdownExportersVersion, setMarkdownExportersVersion] = useState(0);
+
+  const handleRegisterMarkdownExporter = useCallback((blockId: string, exporter: () => Promise<string>) => {
+    markdownExportersRef.current.set(blockId, exporter);
+    setMarkdownExportersVersion(v => v + 1);
+  }, []);
 
   const ops = useIntentBlockOperations({
     intentBlocks,
@@ -234,6 +243,8 @@ export default function RoomShell({
           deleteWritingBlock={ops.deleteWritingBlock}
           updateIntentBlockRaw={updateIntentBlockRaw}
           onRegisterYjsExporter={backup.handleRegisterYjsExporter}
+          markdownExporters={markdownExportersRef.current}
+          onRegisterMarkdownExporter={handleRegisterMarkdownExporter}
           ensureWritingBlocksForIntents={ops.ensureWritingBlocksForIntents}
           roomMeta={roomMeta}
           dependencies={dependencies}

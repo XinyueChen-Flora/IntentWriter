@@ -31,6 +31,14 @@ export type IntentBlock = {
   assigneeName?: string;
   assigneeEmail?: string;
   mergeWritingFrom?: string;
+  // Change tracking (for changes made during writing phase)
+  changeStatus?: 'added' | 'proposed' | 'modified' | 'removed';
+  changeBy?: string;
+  changeByName?: string;
+  changeAt?: number;
+  previousContent?: string; // Store original content when modified
+  // For proposed changes - track discussion state
+  proposalStatus?: 'pending' | 'approved' | 'rejected';
 };
 
 export type RoomMeta = {

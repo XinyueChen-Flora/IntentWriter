@@ -1,20 +1,17 @@
-import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { sendInviteEmail } from '@/lib/email';
 import { NextResponse } from 'next/server';
+import { requireDocumentOwner, isErrorResponse, withErrorHandler } from '@/lib/api/middleware';
 
-export async function POST(request: Request) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
+export const POST = withErrorHandler(async (request: Request) => {
   const { email, documentId } = await request.json();
 
   if (!email || !documentId) {
     return NextResponse.json({ error: 'Email and documentId are required' }, { status: 400 });
   }
+
+  const ownerResult = await requireDocumentOwner(documentId);
+  if (isErrorResponse(ownerResult)) return ownerResult;
+  const { user, admin } = ownerResult;
 
   const normalizedEmail = email.trim().toLowerCase();
 
@@ -23,18 +20,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'You cannot invite yourself' }, { status: 400 });
   }
 
-  // Verify requester is document owner
-  const { data: doc } = await supabase
+  // Get document title for email
+  const { data: doc } = await admin
     .from('documents')
-    .select('id, title, owner_id')
+    .select('title')
     .eq('id', documentId)
     .single();
-
-  if (!doc || doc.owner_id !== user.id) {
-    return NextResponse.json({ error: 'Only the document owner can send invitations' }, { status: 403 });
-  }
-
-  const admin = createAdminClient();
 
   // Get inviter's profile for the email
   const { data: inviterProfile } = await admin
@@ -71,7 +62,7 @@ export async function POST(request: Request) {
       await sendInviteEmail({
         to: normalizedEmail,
         inviterName,
-        documentTitle: doc.title,
+        documentTitle: doc?.title || 'Untitled',
         inviteUrl: `${origin}/room/${documentId}`,
         isExistingUser: true,
       });
@@ -110,7 +101,7 @@ export async function POST(request: Request) {
       await sendInviteEmail({
         to: normalizedEmail,
         inviterName,
-        documentTitle: doc.title,
+        documentTitle: doc?.title || 'Untitled',
         inviteUrl: `${origin}/invite/${invitation.token}`,
         isExistingUser: false,
       });
@@ -123,4 +114,4 @@ export async function POST(request: Request) {
       message: `Invitation sent to ${normalizedEmail}`,
     });
   }
-}
+});

@@ -1,31 +1,16 @@
-import { createClient, createAdminClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
+import { requireDocumentOwner, isErrorResponse, withErrorHandler } from '@/lib/api/middleware';
 
-export async function DELETE(request: Request) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
+export const DELETE = withErrorHandler(async (request: Request) => {
   const { userId, invitationId, documentId } = await request.json();
 
   if (!documentId) {
     return NextResponse.json({ error: 'documentId is required' }, { status: 400 });
   }
 
-  // Verify requester is document owner
-  const admin = createAdminClient();
-  const { data: doc } = await admin
-    .from('documents')
-    .select('owner_id')
-    .eq('id', documentId)
-    .single();
-
-  if (!doc || doc.owner_id !== user.id) {
-    return NextResponse.json({ error: 'Only the document owner can remove collaborators' }, { status: 403 });
-  }
+  const ownerResult = await requireDocumentOwner(documentId);
+  if (isErrorResponse(ownerResult)) return ownerResult;
+  const { user, admin } = ownerResult;
 
   if (userId) {
     // Prevent owner from removing themselves
@@ -61,4 +46,4 @@ export async function DELETE(request: Request) {
   }
 
   return NextResponse.json({ error: 'Either userId or invitationId is required' }, { status: 400 });
-}
+});

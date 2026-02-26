@@ -1,59 +1,50 @@
-import { createClient } from "@/lib/supabase/server";
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import { requireAuth, isErrorResponse, withErrorHandler } from "@/lib/api/middleware";
 
-export async function POST(request: NextRequest) {
-  try {
-    const supabase = await createClient();
+export const POST = withErrorHandler(async (request: Request) => {
+  const authResult = await requireAuth();
+  if (isErrorResponse(authResult)) return authResult;
 
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
+  const body = await request.json();
+  const { intentBlocks } = body;
 
-    if (authError || !user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  if (!intentBlocks || intentBlocks.length < 2) {
+    return NextResponse.json(
+      { error: "Need at least 2 intent blocks to detect dependencies" },
+      { status: 400 }
+    );
+  }
 
-    const body = await request.json();
-    const { intentBlocks } = body;
+  // Build intent hierarchy description
+  const intentDescriptions = intentBlocks
+    .sort((a: any, b: any) => a.position - b.position)
+    .map((block: any) => {
+      const indent = "  ".repeat(block.level || 0);
+      const parent = block.parentId ? ` (child of ${block.parentId})` : "";
+      return `${indent}[${block.id}] L${block.level}${parent}: ${block.content || "(empty)"}`;
+    })
+    .join("\n");
 
-    if (!intentBlocks || intentBlocks.length < 2) {
-      return NextResponse.json(
-        { error: "Need at least 2 intent blocks to detect dependencies" },
-        { status: 400 }
-      );
-    }
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json(
+      { error: "OpenAI API key not configured" },
+      { status: 500 }
+    );
+  }
 
-    // Build intent hierarchy description
-    const intentDescriptions = intentBlocks
-      .sort((a: any, b: any) => a.position - b.position)
-      .map((block: any) => {
-        const indent = "  ".repeat(block.level || 0);
-        const parent = block.parentId ? ` (child of ${block.parentId})` : "";
-        return `${indent}[${block.id}] L${block.level}${parent}: ${block.content || "(empty)"}`;
-      })
-      .join("\n");
-
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: "OpenAI API key not configured" },
-        { status: 500 }
-      );
-    }
-
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: `You analyze a collaborative writing outline and find hidden relationships between sections that writers might overlook.
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: `You analyze a collaborative writing outline and find hidden relationships between sections that writers might overlook.
 
 RULES:
 - Do NOT flag parent-child pairs that are already in the tree — those are obvious.
@@ -68,60 +59,53 @@ Return a JSON array. Each object has:
   { "fromIntentId": "...", "toIntentId": "...", "label": "...", "direction": "directed" | "bidirectional" }
 
 Return ONLY the JSON array, no markdown fences or other text.`,
-          },
-          {
-            role: "user",
-            content: `Outline:\n${intentDescriptions}`,
-          },
-        ],
-        temperature: 0.3,
-        max_tokens: 2000,
-      }),
-    });
+        },
+        {
+          role: "user",
+          content: `Outline:\n${intentDescriptions}`,
+        },
+      ],
+      temperature: 0.3,
+      max_tokens: 2000,
+    }),
+  });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("OpenAI API error:", errorText);
-      return NextResponse.json(
-        { error: "AI analysis failed" },
-        { status: 500 }
-      );
-    }
-
-    const result = await response.json();
-    const content = result.choices?.[0]?.message?.content?.trim() || "[]";
-
-    let suggestedDeps;
-    try {
-      const jsonStr = content.replace(/^```json?\n?/i, "").replace(/\n?```$/i, "");
-      suggestedDeps = JSON.parse(jsonStr);
-    } catch {
-      console.error("Failed to parse AI response:", content);
-      suggestedDeps = [];
-    }
-
-    // Validate
-    const intentIds = new Set(intentBlocks.map((b: any) => b.id));
-    const validDeps = (suggestedDeps || []).filter(
-      (d: any) =>
-        d.fromIntentId &&
-        d.toIntentId &&
-        d.fromIntentId !== d.toIntentId &&
-        intentIds.has(d.fromIntentId) &&
-        intentIds.has(d.toIntentId) &&
-        typeof d.label === "string" &&
-        d.label.length > 0 &&
-        ["directed", "bidirectional"].includes(d.direction)
-    );
-
-    return NextResponse.json({
-      dependencies: validDeps,
-    });
-  } catch (error) {
-    console.error("Detect dependencies API error:", error);
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("OpenAI API error:", errorText);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "AI analysis failed" },
       { status: 500 }
     );
   }
-}
+
+  const result = await response.json();
+  const content = result.choices?.[0]?.message?.content?.trim() || "[]";
+
+  let suggestedDeps;
+  try {
+    const jsonStr = content.replace(/^```json?\n?/i, "").replace(/\n?```$/i, "");
+    suggestedDeps = JSON.parse(jsonStr);
+  } catch {
+    console.error("Failed to parse AI response:", content);
+    suggestedDeps = [];
+  }
+
+  // Validate
+  const intentIds = new Set(intentBlocks.map((b: any) => b.id));
+  const validDeps = (suggestedDeps || []).filter(
+    (d: any) =>
+      d.fromIntentId &&
+      d.toIntentId &&
+      d.fromIntentId !== d.toIntentId &&
+      intentIds.has(d.fromIntentId) &&
+      intentIds.has(d.toIntentId) &&
+      typeof d.label === "string" &&
+      d.label.length > 0 &&
+      ["directed", "bidirectional"].includes(d.direction)
+  );
+
+  return NextResponse.json({
+    dependencies: validDeps,
+  });
+});
