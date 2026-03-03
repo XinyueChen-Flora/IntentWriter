@@ -35,6 +35,30 @@ export type PendingIntentSuggestion = {
   isLoadingImpact?: boolean;
 };
 
+// Section impact data for cross-section diff display
+export type SectionImpactData = {
+  sectionId: string;
+  sectionIntent: string;
+  impactLevel: 'none' | 'minor' | 'significant';
+  reason: string;
+  childIntents: Array<{ id: string; content: string; position: number }>;
+  suggestedChanges?: Array<{
+    action: 'add' | 'modify' | 'remove';
+    intentId?: string;
+    content: string;
+    position: number;
+    reason: string;
+  }>;
+};
+
+// Active diff session - when user is viewing outline diff
+export type ActiveDiffSession = {
+  sourceSectionId: string;  // The section that triggered the diff
+  isLoading: boolean;
+  // Impact data for other sections (keyed by sectionId)
+  sectionImpacts: Map<string, SectionImpactData>;
+};
+
 export type IntentPanelContextValue = {
   // Hierarchy data
   blockMap: Map<string, IntentBlock[]>;
@@ -121,6 +145,11 @@ export type IntentPanelContextValue = {
   setPendingIntentSuggestion: (suggestion: PendingIntentSuggestion | null) => void;
   // Get writing content for a root intent (for API calls)
   getWritingContent?: (rootIntentId: string) => Promise<string>;
+  // Active diff session - for cross-section inline diff display
+  activeDiffSession: ActiveDiffSession | null;
+  setActiveDiffSession: (session: ActiveDiffSession | null) => void;
+  // Get impact data for a specific section (returns undefined if no active diff or section not impacted)
+  getSectionImpact?: (sectionId: string) => SectionImpactData | undefined;
 };
 
 const IntentPanelContext = createContext<IntentPanelContextValue | null>(null);

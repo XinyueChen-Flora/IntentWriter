@@ -200,6 +200,32 @@ export default function IntentPanel({
     isLoadingImpact?: boolean;
   } | null>(null);
 
+  // Active diff session - for cross-section inline diff display
+  const [activeDiffSession, setActiveDiffSession] = useState<{
+    sourceSectionId: string;
+    isLoading: boolean;
+    sectionImpacts: Map<string, {
+      sectionId: string;
+      sectionIntent: string;
+      impactLevel: 'none' | 'minor' | 'significant';
+      reason: string;
+      childIntents: Array<{ id: string; content: string; position: number }>;
+      suggestedChanges?: Array<{
+        action: 'add' | 'modify' | 'remove';
+        intentId?: string;
+        content: string;
+        position: number;
+        reason: string;
+      }>;
+    }>;
+  } | null>(null);
+
+  // Get impact data for a specific section
+  const getSectionImpact = useCallback((sectionId: string) => {
+    if (!activeDiffSession) return undefined;
+    return activeDiffSession.sectionImpacts.get(sectionId);
+  }, [activeDiffSession]);
+
   // Refs for SVG dependency lines
   const containerRef = useRef<HTMLDivElement>(null);
   const blockRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -364,6 +390,10 @@ export default function IntentPanel({
     pendingIntentSuggestion,
     setPendingIntentSuggestion,
     getWritingContent,
+    // Active diff session
+    activeDiffSession,
+    setActiveDiffSession,
+    getSectionImpact,
   }), [
     blockMap, collapsedBlocks, editingBlock, hoveredBlock, selectedBlockId,
     dragDrop.dragOverId, dragDrop.activeId, depLinks.linkMode, isSetupPhase,
@@ -377,6 +407,7 @@ export default function IntentPanel({
     handledOrphanStarts, markOrphanHandled,
     setEditingBlock, setHoveredBlock, setSelectedBlockId,
     pendingWritingSuggestion, pendingIntentSuggestion, getWritingContent,
+    activeDiffSession, getSectionImpact,
   ]);
 
   return (

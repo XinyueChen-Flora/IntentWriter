@@ -411,7 +411,256 @@ function SectionImpactCard({
   );
 }
 
-// Diff panel showing outline-style preview with checkboxes
+// Inline diff view - shows diff between outline and writing (replaces popup panel)
+function InlineDiffView({
+  isSource,
+  simulatedOutline,
+  currentChildren,
+  rootBlock,
+  sectionImpact,
+  isLoading,
+  onApply,
+  onStartDiscussion,
+  onClose,
+}: {
+  isSource: boolean;  // true if this is the section that triggered the diff
+  simulatedOutline?: SimulatedOutline;
+  currentChildren: IntentBlock[];
+  rootBlock: IntentBlock;
+  sectionImpact?: SectionImpactData;  // for impacted sections
+  isLoading?: boolean;
+  onApply?: (selectedIds: Set<string>, mergedIntents: SimulatedIntent[]) => void;
+  onStartDiscussion?: (selectedIds: Set<string>, mergedIntents: SimulatedIntent[]) => void;
+  onClose: () => void;
+}) {
+  // Build merged children for source section
+  const mergedChildren = useMemo(() => {
+    if (!isSource || !simulatedOutline) return [];
+
+    const simulatedChildMap = new Map<string, SimulatedIntent>();
+    simulatedOutline.intents
+      .filter(i => i.parentId === rootBlock.id)
+      .forEach(i => simulatedChildMap.set(i.id, i));
+
+    const result: SimulatedIntent[] = [];
+    const addedIds = new Set<string>();
+
+    currentChildren.forEach((child, idx) => {
+      const simulated = simulatedChildMap.get(child.id);
+      if (simulated) {
+        result.push(simulated);
+        addedIds.add(child.id);
+      } else {
+        result.push({
+          id: child.id,
+          content: child.content,
+          parentId: rootBlock.id,
+          position: idx,
+          status: 'removed',
+        });
+        addedIds.add(child.id);
+      }
+    });
+
+    simulatedOutline.intents
+      .filter(i => i.parentId === rootBlock.id && !addedIds.has(i.id))
+      .forEach(i => result.push(i));
+
+    return result.sort((a, b) => a.position - b.position);
+  }, [isSource, simulatedOutline, currentChildren, rootBlock.id]);
+
+  // Build merged outline for impacted section
+  const impactMergedOutline = useMemo(() => {
+    if (isSource || !sectionImpact) return [];
+
+    const items: Array<{
+      id: string;
+      content: string;
+      position: number;
+      status: 'existing' | 'new' | 'modified' | 'removed';
+      originalContent?: string;
+      reason?: string;
+    }> = [];
+
+    const modifiedIds = new Set<string>();
+    const removedIds = new Set<string>();
+
+    (sectionImpact.suggestedChanges || []).forEach(change => {
+      if (change.action === 'modify' && change.intentId) modifiedIds.add(change.intentId);
+      if (change.action === 'remove' && change.intentId) removedIds.add(change.intentId);
+    });
+
+    sectionImpact.childIntents.forEach(child => {
+      const change = sectionImpact.suggestedChanges?.find(
+        c => c.intentId === child.id && (c.action === 'modify' || c.action === 'remove')
+      );
+
+      if (removedIds.has(child.id)) {
+        items.push({ id: child.id, content: child.content, position: child.position, status: 'removed', reason: change?.reason });
+      } else if (modifiedIds.has(child.id) && change) {
+        items.push({ id: child.id, content: change.content, position: child.position, status: 'modified', originalContent: child.content, reason: change.reason });
+      } else {
+        items.push({ id: child.id, content: child.content, position: child.position, status: 'existing' });
+      }
+    });
+
+    (sectionImpact.suggestedChanges || [])
+      .filter(c => c.action === 'add')
+      .forEach((change, idx) => {
+        items.push({ id: `new-${idx}`, content: change.content, position: change.position, status: 'new', reason: change.reason });
+      });
+
+    return items.sort((a, b) => a.position - b.position);
+  }, [isSource, sectionImpact]);
+
+  // Track selected changes for source section
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => {
+    const set = new Set<string>();
+    mergedChildren.forEach(i => {
+      if (i.status !== 'existing') set.add(i.id);
+    });
+    return set;
+  });
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const changeCount = isSource
+    ? mergedChildren.filter(i => i.status !== 'existing').length
+    : impactMergedOutline.filter(i => i.status !== 'existing').length;
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="w-[18%] flex-shrink-0 ml-12 mr-2 border rounded-lg bg-card p-4 flex items-center justify-center">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="h-4 w-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
+          <span>Assessing impact...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Impact badge for non-source sections
+  const impactBadge = !isSource && sectionImpact && (
+    <span className={`px-1.5 py-0.5 text-[9px] font-medium rounded ${
+      sectionImpact.impactLevel === 'significant'
+        ? 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300'
+        : sectionImpact.impactLevel === 'minor'
+          ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300'
+          : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300'
+    }`}>
+      {sectionImpact.impactLevel === 'significant' ? 'Significant' :
+       sectionImpact.impactLevel === 'minor' ? 'Minor' : 'No change'}
+    </span>
+  );
+
+  return (
+    <div className="w-[18%] flex-shrink-0 ml-12 mr-2 border rounded-lg bg-card overflow-hidden flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold">
+            {isSource ? 'Outline Diff' : 'Suggested Changes'}
+          </span>
+          {changeCount > 0 && isSource && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
+              {changeCount}
+            </span>
+          )}
+          {impactBadge}
+        </div>
+        <button onClick={onClose} className="p-0.5 hover:bg-secondary rounded">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {/* Reason for impact (non-source only) */}
+      {!isSource && sectionImpact?.reason && (
+        <div className="px-3 py-1.5 bg-blue-50 dark:bg-blue-950/30 border-b text-[10px] text-blue-700 dark:text-blue-300">
+          {sectionImpact.reason}
+        </div>
+      )}
+
+      {/* Diff content */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-1 max-h-60">
+        {isSource ? (
+          // Source section: show merged children with checkboxes
+          mergedChildren.map(child => (
+            <DiffIntentRow
+              key={child.id}
+              intent={child}
+              isSelected={selectedIds.has(child.id)}
+              onToggleSelect={() => toggleSelect(child.id)}
+            />
+          ))
+        ) : (
+          // Impacted section: show suggested changes
+          impactMergedOutline.length > 0 ? (
+            impactMergedOutline.map(item => (
+              <div
+                key={item.id}
+                className={`flex items-start gap-1.5 text-[11px] py-0.5 px-1.5 rounded ${
+                  item.status === 'new' ? 'bg-emerald-50/50 dark:bg-emerald-950/30' :
+                  item.status === 'modified' ? 'bg-amber-50/50 dark:bg-amber-950/30' :
+                  item.status === 'removed' ? 'bg-red-50/50 dark:bg-red-950/30' : ''
+                }`}
+              >
+                {item.status === 'new' && <Plus className="h-3 w-3 text-emerald-500 flex-shrink-0 mt-0.5" />}
+                {item.status === 'modified' && <Edit2 className="h-3 w-3 text-amber-500 flex-shrink-0 mt-0.5" />}
+                {item.status === 'removed' && <Minus className="h-3 w-3 text-red-500 flex-shrink-0 mt-0.5" />}
+                {item.status === 'existing' && <div className="w-3 flex-shrink-0" />}
+                <div className="flex-1 min-w-0">
+                  <div className={item.status === 'removed' ? 'line-through text-red-600 dark:text-red-400' : ''}>
+                    {item.content}
+                  </div>
+                  {item.status === 'modified' && item.originalContent && (
+                    <div className="text-[10px] text-muted-foreground line-through">was: {item.originalContent}</div>
+                  )}
+                  {item.reason && (
+                    <div className="text-[10px] text-muted-foreground italic">{item.reason}</div>
+                  )}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="text-[10px] text-muted-foreground text-center py-2">No changes needed</div>
+          )
+        )}
+      </div>
+
+      {/* Action buttons (source section only) */}
+      {isSource && changeCount > 0 && onApply && onStartDiscussion && (
+        <div className="px-3 py-2 border-t bg-muted/30 space-y-1.5">
+          <button
+            onClick={() => onApply(selectedIds, mergedChildren)}
+            disabled={selectedIds.size === 0}
+            className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded transition-colors"
+          >
+            <Check className="h-3 w-3" />
+            Apply & Notify
+          </button>
+          <button
+            onClick={() => onStartDiscussion(selectedIds, mergedChildren)}
+            disabled={selectedIds.size === 0}
+            className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 hover:bg-amber-100 disabled:opacity-50 border border-amber-200 dark:border-amber-700 rounded transition-colors"
+          >
+            <MessageSquare className="h-3 w-3" />
+            Discuss First
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Diff panel showing outline-style preview with checkboxes (LEGACY - keeping for now)
 function OutlineDiffPanel({
   simulatedOutline,
   currentChildren,
@@ -655,12 +904,6 @@ function OutlineDiffPanel({
 
 export function IntentBlockCard({ block, isRoot, depth, rootIndex = 0 }: IntentBlockCardProps) {
   const ctx = useIntentPanelContext();
-  const [showDiffPreview, setShowDiffPreview] = useState(false);
-  // State for "View Outline Diff" impact assessment
-  const [diffPreviewImpacts, setDiffPreviewImpacts] = useState<{
-    isLoading: boolean;
-    sectionImpacts: SectionImpactData[];
-  }>({ isLoading: false, sectionImpacts: [] });
   // State for pending outline change (when user clicks "Make Change to Outline")
   // Enhanced to include suggested changes for each impacted section
   const [pendingChange, setPendingChange] = useState<{
@@ -1041,21 +1284,22 @@ export function IntentBlockCard({ block, isRoot, depth, rootIndex = 0 }: IntentB
   };
 
   // Handle "View Outline Diff" button click - assess impact on related sections
+  // Uses context's activeDiffSession so all sections can see their impacts
   const handleViewOutlineDiff = async () => {
-    console.log('[handleViewOutlineDiff] Called, showDiffPreview:', showDiffPreview);
-
-    if (showDiffPreview) {
-      // Already showing, just hide
-      setShowDiffPreview(false);
+    // If already showing diff from this section, close it
+    if (ctx.activeDiffSession?.sourceSectionId === block.id) {
+      ctx.setActiveDiffSession(null);
       return;
     }
 
-    // Show the diff panel immediately with loading state
-    setShowDiffPreview(true);
-    setDiffPreviewImpacts({ isLoading: true, sectionImpacts: [] });
+    // Set loading state in context
+    ctx.setActiveDiffSession({
+      sourceSectionId: block.id,
+      isLoading: true,
+      sectionImpacts: new Map(),
+    });
 
     // Get proposed changes from simulatedOutline
-    console.log('[handleViewOutlineDiff] simulatedOutline:', simulatedOutline);
     const proposedChanges = simulatedOutline?.intents
       .filter(i => i.status !== 'existing' && i.parentId === block.id)
       .map(i => ({
@@ -1064,11 +1308,12 @@ export function IntentBlockCard({ block, isRoot, depth, rootIndex = 0 }: IntentB
         status: i.status as 'new' | 'modified' | 'removed',
       })) || [];
 
-    console.log('[handleViewOutlineDiff] proposedChanges:', proposedChanges);
-
     if (proposedChanges.length === 0) {
-      console.log('[handleViewOutlineDiff] No proposed changes, skipping API call');
-      setDiffPreviewImpacts({ isLoading: false, sectionImpacts: [] });
+      ctx.setActiveDiffSession({
+        sourceSectionId: block.id,
+        isLoading: false,
+        sectionImpacts: new Map(),
+      });
       return;
     }
 
@@ -1081,34 +1326,25 @@ export function IntentBlockCard({ block, isRoot, depth, rootIndex = 0 }: IntentB
       relationship: string;
     }> = [];
 
-    console.log('[handleViewOutlineDiff] ctx.dependencies:', ctx.dependencies, 'isRoot:', isRoot);
-
     if (ctx.dependencies && isRoot) {
-      // Get all intent IDs in this section (root + all children)
       const sectionIntentIds = new Set<string>([block.id]);
       children.forEach(child => sectionIntentIds.add(child.id));
-      console.log('[handleViewOutlineDiff] sectionIntentIds:', Array.from(sectionIntentIds));
 
-      // Find dependencies that involve any intent in this section
       const relevantDeps = ctx.dependencies.filter(
         d => sectionIntentIds.has(d.fromIntentId) || sectionIntentIds.has(d.toIntentId)
       );
-      console.log('[handleViewOutlineDiff] relevantDeps:', relevantDeps);
 
       const addedRoots = new Set<string>();
 
       for (const dep of relevantDeps) {
-        // Find the "other" intent (the one not in this section, or if both are, pick toIntentId)
         const relatedIntentId = sectionIntentIds.has(dep.fromIntentId) && !sectionIntentIds.has(dep.toIntentId)
           ? dep.toIntentId
           : sectionIntentIds.has(dep.toIntentId) && !sectionIntentIds.has(dep.fromIntentId)
             ? dep.fromIntentId
-            : dep.toIntentId; // fallback
+            : dep.toIntentId;
 
         const relatedBlock = ctx.blocks.find(b => b.id === relatedIntentId);
         if (!relatedBlock) continue;
-
-        // Skip if the related intent is within the same section
         if (sectionIntentIds.has(relatedIntentId)) continue;
 
         let relatedRoot = relatedBlock;
@@ -1139,16 +1375,16 @@ export function IntentBlockCard({ block, isRoot, depth, rootIndex = 0 }: IntentB
       }
     }
 
-    console.log('[handleViewOutlineDiff] relatedSections:', relatedSections);
-
     if (relatedSections.length === 0) {
-      console.log('[handleViewOutlineDiff] No related sections, skipping API call');
-      setDiffPreviewImpacts({ isLoading: false, sectionImpacts: [] });
+      ctx.setActiveDiffSession({
+        sourceSectionId: block.id,
+        isLoading: false,
+        sectionImpacts: new Map(),
+      });
       return;
     }
 
     // Call API to assess impact
-    console.log('[handleViewOutlineDiff] Calling /api/assess-impact...');
     try {
       const response = await fetch('/api/assess-impact', {
         method: 'POST',
@@ -1161,30 +1397,41 @@ export function IntentBlockCard({ block, isRoot, depth, rootIndex = 0 }: IntentB
         }),
       });
 
-      console.log('[handleViewOutlineDiff] API response status:', response.status);
       if (response.ok) {
         const data = await response.json();
-        console.log('[handleViewOutlineDiff] API data:', data);
-        const sectionImpacts = data.impacts.map((impact: any) => {
+        const impactsMap = new Map<string, SectionImpactData>();
+
+        data.impacts.forEach((impact: any) => {
           const original = relatedSections.find(s => s.id === impact.sectionId);
-          return {
+          impactsMap.set(impact.sectionId, {
             sectionId: impact.sectionId,
             sectionIntent: impact.sectionIntent,
             impactLevel: impact.impactLevel,
             reason: impact.reason,
             childIntents: original?.childIntents || [],
             suggestedChanges: impact.suggestedChanges,
-          };
+          });
         });
-        console.log('[handleViewOutlineDiff] Setting sectionImpacts:', sectionImpacts);
-        setDiffPreviewImpacts({ isLoading: false, sectionImpacts });
+
+        ctx.setActiveDiffSession({
+          sourceSectionId: block.id,
+          isLoading: false,
+          sectionImpacts: impactsMap,
+        });
       } else {
-        console.log('[handleViewOutlineDiff] API error');
-        setDiffPreviewImpacts({ isLoading: false, sectionImpacts: [] });
+        ctx.setActiveDiffSession({
+          sourceSectionId: block.id,
+          isLoading: false,
+          sectionImpacts: new Map(),
+        });
       }
     } catch (error) {
-      console.error('[handleViewOutlineDiff] Failed to assess impact:', error);
-      setDiffPreviewImpacts({ isLoading: false, sectionImpacts: [] });
+      console.error('Failed to assess impact:', error);
+      ctx.setActiveDiffSession({
+        sourceSectionId: block.id,
+        isLoading: false,
+        sectionImpacts: new Map(),
+      });
     }
   };
 
@@ -1199,7 +1446,7 @@ export function IntentBlockCard({ block, isRoot, depth, rootIndex = 0 }: IntentB
           {/* Left Panel: Intent card + children */}
           <div
             ref={(el) => { ctx.registerBlockRef(block.id, el); }}
-            className={ctx.isSetupPhase ? "w-[60%]" : "w-[30%] flex-shrink-0"}
+            className={ctx.isSetupPhase ? "w-[60%]" : ctx.activeDiffSession ? "w-[18%] flex-shrink-0" : "w-[28%] flex-shrink-0"}
             onMouseEnter={() => ctx.setHoveredBlock(block.id)}
             onMouseLeave={() => ctx.setHoveredBlock(null)}
             onClick={ctx.linkMode ? (e) => ctx.handleBlockClickForLink(block.id, e) : undefined}
@@ -1407,232 +1654,135 @@ export function IntentBlockCard({ block, isRoot, depth, rootIndex = 0 }: IntentB
               <button
                 onClick={handleViewOutlineDiff}
                 className={`mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border transition-colors ${
-                  showDiffPreview
+                  ctx.activeDiffSession?.sourceSectionId === block.id
                     ? "bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-900/50 dark:text-blue-300 dark:border-blue-700"
                     : "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-700 dark:hover:bg-amber-900/50"
                 }`}
               >
                 <Eye className="h-3.5 w-3.5" />
-                {showDiffPreview ? "Hide Outline Diff" : "View Outline Diff"}
+                {ctx.activeDiffSession?.sourceSectionId === block.id ? "Hide Outline Diff" : "View Outline Diff"}
               </button>
             )}
           </div>
 
-          {/* Spacer/Diff Preview + Writing panel — hidden in setup phase */}
+          {/* Spacer for dependency connecting lines */}
+          {!ctx.isSetupPhase && (
+            <div className="w-12 flex-shrink-0" />
+          )}
+
+          {/* Inline Diff + Writing panel — hidden in setup phase */}
           {!ctx.isSetupPhase && (
             <div className="flex-1 min-w-0 flex flex-row items-stretch">
-              {/* Outline Diff Panel (when user clicks "Add to Outline" or "View Outline Diff") */}
-              {pendingChange ? (
-                // Use existing simulatedOutline if available (has correct positions from AI),
-                // otherwise create one with just the new intent
-                <OutlineDiffPanel
-                  simulatedOutline={(() => {
-                    // Check if we have a simulatedOutline with this orphan's intent
-                    if (simulatedOutline) {
-                      const matchingIntent = simulatedOutline.intents.find(
-                        i => i.sourceOrphanStart === pendingChange.orphanStart && i.status === 'new'
-                      );
-                      if (matchingIntent) {
-                        // Use the full simulatedOutline - it has correct positions
-                        // Cross-section impacts are now handled via sectionImpacts prop
-                        return simulatedOutline;
-                      }
-                    }
-                    // Fallback: create a simple outline with new intent at end
-                    return {
-                      intents: [
-                        { id: block.id, content: block.content, parentId: null, position: 0, status: 'existing' as const },
-                        ...children.map((c, idx) => ({
-                          id: c.id,
-                          content: c.content,
-                          parentId: block.id,
-                          position: idx,
-                          status: 'existing' as const,
-                        })),
-                        {
-                          id: `new-${Date.now()}`,
-                          content: pendingChange.suggestedIntent,
-                          parentId: block.id,
-                          position: children.length,
-                          status: 'new' as const,
-                          sourceOrphanStart: pendingChange.orphanStart,
-                        },
-                      ],
-                      // Cross-section impacts are now handled via sectionImpacts prop
-                      crossSectionImpacts: [],
-                      summary: 'Add new intent based on writing content',
-                    };
-                  })()}
-                  currentChildren={children}
-                  rootBlock={block}
-                  currentUser={ctx.currentUser}
-                  onClose={() => setPendingChange(null)}
-                  sectionImpacts={pendingChange.sectionImpacts}
-                  isLoadingImpact={pendingChange.isLoadingImpact}
-                  onChangeAndPropose={(selectedIds, mergedIntents) => {
-                    // Apply selected changes with correct positions
-                    const sortedIntents = mergedIntents
-                      .filter(i => selectedIds.has(i.id) && i.status !== 'existing')
-                      .sort((a, b) => a.position - b.position);
+              {/* Inline Diff View - shown for source section or impacted sections */}
+              {(() => {
+                const isSourceSection = ctx.activeDiffSession?.sourceSectionId === block.id;
+                const sectionImpact = ctx.getSectionImpact?.(block.id);
+                const showInlineDiff = isSourceSection || sectionImpact;
 
-                    sortedIntents.forEach((intent, idx) => {
-                      if (intent.status === 'new' && intent.content) {
-                        // Find the block to insert after based on position
-                        const sortedChildren = [...children].sort((a, b) => a.position - b.position);
-                        const insertAfterBlock = sortedChildren[intent.position - 1];
+                if (!showInlineDiff) return null;
 
-                        const newBlock = insertAfterBlock
-                          ? ctx.addBlock({ afterBlockId: insertAfterBlock.id })
-                          : ctx.addBlock({ asChildOf: block.id });
-                        ctx.updateBlock(newBlock.id, intent.content);
-                        ctx.updateIntentBlockRaw(newBlock.id, {
-                          changeStatus: 'added',
-                          changeBy: ctx.currentUser.id,
-                          changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
-                          changeAt: Date.now(),
-                        });
-                        if (intent.sourceOrphanStart) {
-                          ctx.markOrphanHandled(intent.sourceOrphanStart);
+                return (
+                  <InlineDiffView
+                    isSource={isSourceSection}
+                    simulatedOutline={isSourceSection ? simulatedOutline : undefined}
+                    currentChildren={children}
+                    rootBlock={block}
+                    sectionImpact={sectionImpact}
+                    isLoading={ctx.activeDiffSession?.isLoading}
+                    onClose={() => ctx.setActiveDiffSession(null)}
+                    onApply={isSourceSection ? (selectedIds, mergedIntents) => {
+                      // Apply selected changes
+                      const sortedIntents = mergedIntents
+                        .filter(i => selectedIds.has(i.id) && i.status !== 'existing')
+                        .sort((a, b) => a.position - b.position);
+
+                      const sortedChildren = [...children].sort((a, b) => a.position - b.position);
+
+                      sortedIntents.forEach(intent => {
+                        if (intent.status === 'new' && intent.content) {
+                          const insertAfterBlock = sortedChildren[intent.position - 1];
+                          const newBlock = insertAfterBlock
+                            ? ctx.addBlock({ afterBlockId: insertAfterBlock.id })
+                            : ctx.addBlock({ asChildOf: block.id });
+                          ctx.updateBlock(newBlock.id, intent.content);
+                          ctx.updateIntentBlockRaw(newBlock.id, {
+                            changeStatus: 'added',
+                            changeBy: ctx.currentUser.id,
+                            changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
+                            changeAt: Date.now(),
+                          });
+                          if (intent.sourceOrphanStart) {
+                            ctx.markOrphanHandled(intent.sourceOrphanStart);
+                          }
+                        } else if (intent.status === 'modified') {
+                          ctx.updateBlock(intent.id, intent.content);
+                          ctx.updateIntentBlockRaw(intent.id, {
+                            changeStatus: 'modified',
+                            changeBy: ctx.currentUser.id,
+                            changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
+                            changeAt: Date.now(),
+                          });
+                        } else if (intent.status === 'removed') {
+                          ctx.updateIntentBlockRaw(intent.id, {
+                            changeStatus: 'removed',
+                            changeBy: ctx.currentUser.id,
+                            changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
+                            changeAt: Date.now(),
+                          });
                         }
-                      }
-                    });
-                    setPendingChange(null);
-                    setTimeout(() => ctx.triggerCheck?.(block.id), 500);
-                  }}
-                  onStartDiscussion={(selectedIds, mergedIntents) => {
-                    // Apply selected changes as proposed with correct positions
-                    const sortedIntents = mergedIntents
-                      .filter(i => selectedIds.has(i.id) && i.status !== 'existing')
-                      .sort((a, b) => a.position - b.position);
-
-                    sortedIntents.forEach((intent, idx) => {
-                      if (intent.status === 'new' && intent.content) {
-                        const sortedChildren = [...children].sort((a, b) => a.position - b.position);
-                        const insertAfterBlock = sortedChildren[intent.position - 1];
-
-                        const newBlock = insertAfterBlock
-                          ? ctx.addBlock({ afterBlockId: insertAfterBlock.id })
-                          : ctx.addBlock({ asChildOf: block.id });
-                        ctx.updateBlock(newBlock.id, intent.content);
-                        ctx.updateIntentBlockRaw(newBlock.id, {
-                          changeStatus: 'proposed',
-                          changeBy: ctx.currentUser.id,
-                          changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
-                          changeAt: Date.now(),
-                          proposalStatus: 'pending',
-                        });
-                        if (intent.sourceOrphanStart) {
-                          ctx.markOrphanHandled(intent.sourceOrphanStart);
-                        }
-                      }
-                    });
-                    setPendingChange(null);
-                  }}
-                />
-              ) : showDiffPreview && simulatedOutline ? (
-                <OutlineDiffPanel
-                  simulatedOutline={simulatedOutline}
-                  currentChildren={children}
-                  rootBlock={block}
-                  currentUser={ctx.currentUser}
-                  onClose={() => setShowDiffPreview(false)}
-                  sectionImpacts={diffPreviewImpacts.sectionImpacts}
-                  isLoadingImpact={diffPreviewImpacts.isLoading}
-                  onChangeAndPropose={(selectedIds, mergedIntents) => {
-                    // Apply selected changes with correct positions
-                    const sortedIntents = mergedIntents
-                      .filter(i => selectedIds.has(i.id) && i.status !== 'existing')
-                      .sort((a, b) => a.position - b.position);
-
-                    const sortedChildren = [...children].sort((a, b) => a.position - b.position);
-
-                    sortedIntents.forEach(intent => {
-                      if (intent.status === 'new' && intent.content) {
-                        // Insert at correct position
-                        const insertAfterBlock = sortedChildren[intent.position - 1];
-                        const newBlock = insertAfterBlock
-                          ? ctx.addBlock({ afterBlockId: insertAfterBlock.id })
-                          : ctx.addBlock({ asChildOf: block.id });
-                        ctx.updateBlock(newBlock.id, intent.content);
-                        ctx.updateIntentBlockRaw(newBlock.id, {
-                          changeStatus: 'added',
-                          changeBy: ctx.currentUser.id,
-                          changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
-                          changeAt: Date.now(),
-                        });
-                        if (intent.sourceOrphanStart) {
-                          ctx.markOrphanHandled(intent.sourceOrphanStart);
-                        }
-                      } else if (intent.status === 'modified') {
-                        ctx.updateBlock(intent.id, intent.content);
-                        ctx.updateIntentBlockRaw(intent.id, {
-                          changeStatus: 'modified',
-                          changeBy: ctx.currentUser.id,
-                          changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
-                          changeAt: Date.now(),
-                        });
-                      } else if (intent.status === 'removed') {
-                        ctx.updateIntentBlockRaw(intent.id, {
-                          changeStatus: 'removed',
-                          changeBy: ctx.currentUser.id,
-                          changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
-                          changeAt: Date.now(),
-                        });
-                      }
-                    });
-                    setShowDiffPreview(false);
-                    setTimeout(() => ctx.triggerCheck?.(block.id), 500);
-                  }}
-                  onStartDiscussion={(selectedIds, mergedIntents) => {
-                    // Apply selected changes as proposed with correct positions
-                    const sortedIntents = mergedIntents
-                      .filter(i => selectedIds.has(i.id) && i.status !== 'existing')
-                      .sort((a, b) => a.position - b.position);
-
-                    const sortedChildren = [...children].sort((a, b) => a.position - b.position);
-
-                    sortedIntents.forEach(intent => {
-                      if (intent.status === 'new' && intent.content) {
-                        const insertAfterBlock = sortedChildren[intent.position - 1];
-                        const newBlock = insertAfterBlock
-                          ? ctx.addBlock({ afterBlockId: insertAfterBlock.id })
-                          : ctx.addBlock({ asChildOf: block.id });
-                        ctx.updateBlock(newBlock.id, intent.content);
-                        ctx.updateIntentBlockRaw(newBlock.id, {
-                          changeStatus: 'proposed',
-                          changeBy: ctx.currentUser.id,
-                          changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
-                          changeAt: Date.now(),
-                          proposalStatus: 'pending',
-                        });
-                        if (intent.sourceOrphanStart) {
-                          ctx.markOrphanHandled(intent.sourceOrphanStart);
-                        }
-                      } else if (intent.status === 'modified') {
-                        ctx.updateBlock(intent.id, intent.content);
-                        ctx.updateIntentBlockRaw(intent.id, {
-                          changeStatus: 'proposed',
-                          changeBy: ctx.currentUser.id,
-                          changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
-                          changeAt: Date.now(),
-                          proposalStatus: 'pending',
-                        });
-                      } else if (intent.status === 'removed') {
-                        ctx.updateIntentBlockRaw(intent.id, {
-                          changeStatus: 'removed',
-                          changeBy: ctx.currentUser.id,
-                          changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
-                          changeAt: Date.now(),
-                          proposalStatus: 'pending',
-                        });
-                      }
                       });
-                    setShowDiffPreview(false);
-                  }}
-                />
-              ) : (
-                <div className="w-36 flex-shrink-0" />
-              )}
+                      ctx.setActiveDiffSession(null);
+                      setTimeout(() => ctx.triggerCheck?.(block.id), 500);
+                    } : undefined}
+                    onStartDiscussion={isSourceSection ? (selectedIds, mergedIntents) => {
+                      // Apply as proposed changes
+                      const sortedIntents = mergedIntents
+                        .filter(i => selectedIds.has(i.id) && i.status !== 'existing')
+                        .sort((a, b) => a.position - b.position);
+
+                      const sortedChildren = [...children].sort((a, b) => a.position - b.position);
+
+                      sortedIntents.forEach(intent => {
+                        if (intent.status === 'new' && intent.content) {
+                          const insertAfterBlock = sortedChildren[intent.position - 1];
+                          const newBlock = insertAfterBlock
+                            ? ctx.addBlock({ afterBlockId: insertAfterBlock.id })
+                            : ctx.addBlock({ asChildOf: block.id });
+                          ctx.updateBlock(newBlock.id, intent.content);
+                          ctx.updateIntentBlockRaw(newBlock.id, {
+                            changeStatus: 'proposed',
+                            changeBy: ctx.currentUser.id,
+                            changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
+                            changeAt: Date.now(),
+                            proposalStatus: 'pending',
+                          });
+                          if (intent.sourceOrphanStart) {
+                            ctx.markOrphanHandled(intent.sourceOrphanStart);
+                          }
+                        } else if (intent.status === 'modified') {
+                          ctx.updateBlock(intent.id, intent.content);
+                          ctx.updateIntentBlockRaw(intent.id, {
+                            changeStatus: 'proposed',
+                            changeBy: ctx.currentUser.id,
+                            changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
+                            changeAt: Date.now(),
+                            proposalStatus: 'pending',
+                          });
+                        } else if (intent.status === 'removed') {
+                          ctx.updateIntentBlockRaw(intent.id, {
+                            changeStatus: 'removed',
+                            changeBy: ctx.currentUser.id,
+                            changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
+                            changeAt: Date.now(),
+                            proposalStatus: 'pending',
+                          });
+                        }
+                      });
+                      ctx.setActiveDiffSession(null);
+                    } : undefined}
+                  />
+                );
+              })()}
               <div
                 className="flex-1 min-w-0 border rounded-lg bg-card overflow-hidden"
                 style={accentColor ? { borderLeftWidth: '3px', borderLeftColor: accentColor } : undefined}
