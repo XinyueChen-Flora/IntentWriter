@@ -20,6 +20,7 @@ import {
 import { Plus, LogIn, Share2, Trash2 } from "lucide-react";
 import UserAvatar from "@/components/user/UserAvatar";
 import ShareDialog from "@/components/share/ShareDialog";
+import { LogoIcon } from "@/components/common/Logo";
 
 type Document = {
   id: string;
@@ -56,6 +57,8 @@ export default function DashboardClient({ user, profile, initialDocuments }: Das
   const [shareDocId, setShareDocId] = useState("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
+  // Track newly created document for post-creation flow
+  const [newlyCreatedDoc, setNewlyCreatedDoc] = useState<Document | null>(null);
   const router = useRouter();
   const supabase = createClient();
 
@@ -100,8 +103,8 @@ export default function DashboardClient({ user, profile, initialDocuments }: Das
 
         setDocuments([data, ...documents]);
         setNewDocTitle("");
-        setCreateDialogOpen(false);
-        router.push(`/room/${data.id}`);
+        // Show post-creation options instead of immediately navigating
+        setNewlyCreatedDoc(data);
       }
     } catch (err: any) {
       setError(err.message || "Failed to create document");
@@ -120,12 +123,16 @@ export default function DashboardClient({ user, profile, initialDocuments }: Das
     if (!confirm("Are you sure you want to delete this document?")) return;
 
     try {
-      const { error } = await supabase
-        .from("documents")
-        .delete()
-        .eq("id", docId);
+      const res = await fetch("/api/delete-document", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentId: docId }),
+      });
 
-      if (error) throw error;
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to delete document");
+      }
 
       setDocuments(documents.filter((doc) => doc.id !== docId));
     } catch (err: any) {
@@ -209,88 +216,172 @@ export default function DashboardClient({ user, profile, initialDocuments }: Das
   const collaboratedDocuments = documents.filter((doc) => doc.owner_id !== user.id);
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-[#FEF9F3]">
       {/* Header */}
-      <div className="border-b">
-        <div className="container mx-auto px-4 py-4 flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <UserAvatar
-              avatarUrl={profile?.avatar_url || user.user_metadata?.avatar_url}
-              name={profile?.full_name || user.user_metadata?.full_name}
-              email={user.email}
-              className="h-10 w-10"
-            />
-            <div>
-              <h1 className="text-2xl font-bold">Intent Writer</h1>
-              <p className="text-sm text-muted-foreground">
-                {profile?.full_name || user.user_metadata?.full_name || user.email}
-              </p>
-            </div>
+      <div className="bg-background border-b">
+        <div className="max-w-4xl mx-auto px-6 py-3 flex justify-between items-center">
+          <div className="flex items-center gap-2.5">
+            <LogoIcon size={30} />
+            <h1 className="text-primary text-xl font-bold tracking-tight" style={{ fontFamily: 'var(--font-brand)' }}>IntentWriter</h1>
           </div>
-          <Button variant="outline" onClick={handleSignOut}>
-            Sign out
-          </Button>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <UserAvatar
+                avatarUrl={profile?.avatar_url || user.user_metadata?.avatar_url}
+                name={profile?.full_name || user.user_metadata?.full_name}
+                email={user.email}
+                className="h-7 w-7"
+              />
+              <span className="text-sm text-muted-foreground hidden sm:inline">
+                {profile?.full_name || user.user_metadata?.full_name || user.email}
+              </span>
+            </div>
+            <Button variant="ghost" size="sm" onClick={handleSignOut}>
+              Sign out
+            </Button>
+          </div>
         </div>
       </div>
 
-      <div className="container mx-auto px-4 py-8 space-y-6">
+      <div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
         {/* Action Buttons */}
-        <div className="flex gap-4">
-          <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+        <div className="grid grid-cols-2 gap-3 max-w-md">
+          <Dialog
+            open={createDialogOpen}
+            onOpenChange={(open) => {
+              setCreateDialogOpen(open);
+              if (!open) {
+                setNewlyCreatedDoc(null);
+                setNewDocTitle("");
+                setError(null);
+              }
+            }}
+          >
             <DialogTrigger asChild>
-              <Button size="lg">
-                <Plus className="h-4 w-4 mr-2" />
-                New Document
-              </Button>
+              <button className="flex items-center gap-3 px-4 py-3 rounded-lg bg-background border hover:border-primary hover:shadow-sm transition-all group">
+                <span className="h-9 w-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
+                  <Plus className="h-5 w-5" />
+                </span>
+                <div className="text-left">
+                  <div className="font-medium text-sm">New Document</div>
+                  <div className="text-xs text-muted-foreground">Create your own</div>
+                </div>
+              </button>
             </DialogTrigger>
             <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Create New Document</DialogTitle>
-                <DialogDescription>
-                  Start a new collaborative writing session
-                </DialogDescription>
-              </DialogHeader>
-              <form onSubmit={handleCreateDocument} className="space-y-4 mt-4">
-                <Input
-                  type="text"
-                  value={newDocTitle}
-                  onChange={(e) => setNewDocTitle(e.target.value)}
-                  placeholder="Enter document title..."
-                  disabled={loading}
-                  autoFocus
-                />
-                {error && (
-                  <p className="text-sm text-destructive">{error}</p>
-                )}
-                <div className="flex justify-end gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setCreateDialogOpen(false)}
-                    disabled={loading}
-                  >
-                    Cancel
-                  </Button>
-                  <Button type="submit" disabled={loading || !newDocTitle.trim()}>
-                    {loading ? "Creating..." : "Create"}
-                  </Button>
-                </div>
-              </form>
+              {newlyCreatedDoc ? (
+                // Post-creation success state with workflow explanation
+                <>
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                      <span className="h-6 w-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-sm">✓</span>
+                      Document Created!
+                    </DialogTitle>
+                  </DialogHeader>
+
+                  {/* Workflow explanation */}
+                  <div className="mt-4 p-4 bg-muted/50 rounded-lg space-y-3">
+                    <p className="text-sm font-medium">How IntentWriter works:</p>
+                    <div className="space-y-2 text-sm text-muted-foreground">
+                      <div className="flex gap-2">
+                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center font-medium">1</span>
+                        <span><strong>Invite Team</strong> — Share the document with collaborators</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center font-medium">2</span>
+                        <span><strong>Build Outline</strong> — Define what your team wants to write</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center font-medium">3</span>
+                        <span><strong>Write Together</strong> — AI keeps everyone aligned</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-3 mt-4">
+                    <Button
+                      onClick={() => {
+                        setShareDocId(newlyCreatedDoc.id);
+                        setCreateDialogOpen(false);
+                        setNewlyCreatedDoc(null);
+                        setShareDialogOpen(true);
+                      }}
+                      className="w-full"
+                    >
+                      <Share2 className="h-4 w-4 mr-2" />
+                      Invite Team
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        const docId = newlyCreatedDoc.id;
+                        setCreateDialogOpen(false);
+                        setNewlyCreatedDoc(null);
+                        router.push(`/room/${docId}`);
+                      }}
+                      className="w-full"
+                    >
+                      Skip for Now
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                // Initial create form
+                <>
+                  <DialogHeader>
+                    <DialogTitle>Create New Document</DialogTitle>
+                    <DialogDescription>
+                      Start a new collaborative writing session
+                    </DialogDescription>
+                  </DialogHeader>
+                  <form onSubmit={handleCreateDocument} className="space-y-4 mt-4">
+                    <Input
+                      type="text"
+                      value={newDocTitle}
+                      onChange={(e) => setNewDocTitle(e.target.value)}
+                      placeholder="Enter document title..."
+                      disabled={loading}
+                      autoFocus
+                    />
+                    {error && (
+                      <p className="text-sm text-destructive">{error}</p>
+                    )}
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setCreateDialogOpen(false)}
+                        disabled={loading}
+                      >
+                        Cancel
+                      </Button>
+                      <Button type="submit" disabled={loading || !newDocTitle.trim()}>
+                        {loading ? "Creating..." : "Create"}
+                      </Button>
+                    </div>
+                  </form>
+                </>
+              )}
             </DialogContent>
           </Dialog>
 
           <Dialog open={joinDialogOpen} onOpenChange={setJoinDialogOpen}>
             <DialogTrigger asChild>
-              <Button size="lg" variant="outline">
-                <LogIn className="h-4 w-4 mr-2" />
-                Join Room
-              </Button>
+              <button className="flex items-center gap-3 px-4 py-3 rounded-lg bg-background border hover:border-primary hover:shadow-sm transition-all group">
+                <span className="h-9 w-9 rounded-lg bg-muted text-muted-foreground flex items-center justify-center group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
+                  <LogIn className="h-5 w-5" />
+                </span>
+                <div className="text-left">
+                  <div className="font-medium text-sm">Join Document</div>
+                  <div className="text-xs text-muted-foreground">Via shared link</div>
+                </div>
+              </button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Join Writing Room</DialogTitle>
+                <DialogTitle>Join Document</DialogTitle>
                 <DialogDescription>
-                  Enter a document ID or paste a shared link
+                  Paste the link shared by your collaborator
                 </DialogDescription>
               </DialogHeader>
               <form onSubmit={handleJoinDocument} className="space-y-4 mt-4">
@@ -303,7 +394,7 @@ export default function DashboardClient({ user, profile, initialDocuments }: Das
                     const match = val.match(/\/room\/([a-f0-9-]+)/);
                     setJoinDocId(match ? match[1] : val);
                   }}
-                  placeholder="Paste document ID or link..."
+                  placeholder="Paste the shared link here..."
                   disabled={joinLoading}
                   autoFocus
                 />
@@ -337,14 +428,14 @@ export default function DashboardClient({ user, profile, initialDocuments }: Das
         />
 
         {/* Documents List */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Your Documents</CardTitle>
-            <CardDescription>
+        <div className="bg-background rounded-xl border">
+          <div className="px-5 py-4 border-b">
+            <h2 className="text-lg">Your Documents</h2>
+            <p className="text-sm text-muted-foreground">
               {documents.length} {documents.length === 1 ? 'document' : 'documents'}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+            </p>
+          </div>
+          <div className="p-2">
             {documents.length === 0 ? (
               <div className="text-center py-12">
                 <p className="text-muted-foreground mb-2">No documents yet</p>
@@ -353,47 +444,44 @@ export default function DashboardClient({ user, profile, initialDocuments }: Das
                 </p>
               </div>
             ) : (
-              <div className="space-y-6">
+              <div className="space-y-4">
                 {ownedDocuments.length > 0 && (
                   <div>
-                    <h3 className="text-sm font-medium mb-3">Owned by You</h3>
-                    <div className="space-y-2">
-                      {ownedDocuments.map((doc, index) => (
-                        <div key={doc.id}>
-                          {index > 0 && <Separator className="my-2" />}
-                          <div className="flex items-center justify-between py-2">
-                            <button
-                              onClick={() => router.push(`/room/${doc.id}`)}
-                              className="flex-1 text-left group"
-                            >
-                              <div className="flex items-center gap-2">
-                                <h3 className="font-medium group-hover:underline">
-                                  {doc.title}
-                                </h3>
-                              </div>
-                              <p className="text-sm text-muted-foreground">
-                                Last updated: {new Date(doc.updated_at).toLocaleDateString()}
-                              </p>
-                            </button>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleShareClick(doc.id)}
-                              >
-                                <Share2 className="h-4 w-4 mr-1" />
-                                Share
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleDeleteDocument(doc.id)}
-                                className="text-destructive hover:text-destructive"
-                              >
-                                <Trash2 className="h-4 w-4 mr-1" />
-                                Delete
-                              </Button>
+                    <h3 className="text-sm font-medium text-foreground/60 uppercase tracking-wide px-3 py-2">Owned by You</h3>
+                    <div className="space-y-0.5">
+                      {ownedDocuments.map((doc) => (
+                        <div
+                          key={doc.id}
+                          className="flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-muted/50 transition-colors group"
+                        >
+                          <button
+                            onClick={() => router.push(`/room/${doc.id}`)}
+                            className="flex-1 text-left"
+                          >
+                            <div className="font-medium text-sm group-hover:text-primary transition-colors">
+                              {doc.title}
                             </div>
+                            <div className="text-xs text-muted-foreground">
+                              {new Date(doc.updated_at).toLocaleDateString()}
+                            </div>
+                          </button>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleShareClick(doc.id)}
+                              className="h-8 px-2 text-muted-foreground hover:text-foreground"
+                            >
+                              <Share2 className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteDocument(doc.id)}
+                              className="h-8 px-2 text-muted-foreground hover:text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           </div>
                         </div>
                       ))}
@@ -403,29 +491,29 @@ export default function DashboardClient({ user, profile, initialDocuments }: Das
 
                 {collaboratedDocuments.length > 0 && (
                   <div>
-                    <h3 className="text-sm font-medium mb-3">Collaborated</h3>
-                    <div className="space-y-2">
-                      {collaboratedDocuments.map((doc, index) => (
-                        <div key={doc.id}>
-                          {index > 0 && <Separator className="my-2" />}
-                          <div className="flex items-center justify-between py-2">
-                            <button
-                              onClick={() => router.push(`/room/${doc.id}`)}
-                              className="flex-1 text-left group"
-                            >
-                              <div className="flex items-center gap-2">
-                                <h3 className="font-medium group-hover:underline">
-                                  {doc.title}
-                                </h3>
-                                <Badge variant="secondary" className="text-xs">
-                                  Collaborator
-                                </Badge>
-                              </div>
-                              <p className="text-sm text-muted-foreground">
-                                Last updated: {new Date(doc.updated_at).toLocaleDateString()}
-                              </p>
-                            </button>
-                          </div>
+                    <h3 className="text-sm font-medium text-foreground/60 uppercase tracking-wide px-3 py-2">Shared with You</h3>
+                    <div className="space-y-0.5">
+                      {collaboratedDocuments.map((doc) => (
+                        <div
+                          key={doc.id}
+                          className="flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-muted/50 transition-colors group"
+                        >
+                          <button
+                            onClick={() => router.push(`/room/${doc.id}`)}
+                            className="flex-1 text-left"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-sm group-hover:text-primary transition-colors">
+                                {doc.title}
+                              </span>
+                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                                Shared
+                              </Badge>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {new Date(doc.updated_at).toLocaleDateString()}
+                            </div>
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -433,8 +521,8 @@ export default function DashboardClient({ user, profile, initialDocuments }: Das
                 )}
               </div>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
     </div>
   );

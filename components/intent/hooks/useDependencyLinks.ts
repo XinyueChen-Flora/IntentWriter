@@ -1,17 +1,8 @@
 import { useState, useCallback, useEffect, useMemo, type RefObject } from "react";
-import type { IntentBlock, IntentDependency } from "@/lib/partykit";
+import type { IntentBlock, IntentDependency, RelationshipType } from "@/lib/partykit";
 
-// Rotating palette for dependency lines
-export const DEP_COLORS = [
-  '#60a5fa', // blue-400
-  '#34d399', // emerald-400
-  '#fb923c', // orange-400
-  '#a78bfa', // violet-400
-  '#f472b6', // pink-400
-  '#22d3ee', // cyan-400
-  '#fbbf24', // amber-400
-  '#f87171', // red-400
-];
+// Single color for all dependency lines - uses CSS variable for theme alignment
+export const DEP_COLOR = 'hsl(var(--primary))'; // theme primary color
 
 export type DepLine = {
   id: string;
@@ -28,6 +19,7 @@ interface UseDependencyLinksParams {
   dependencies?: IntentDependency[];
   addDependency?: (dep: IntentDependency) => void;
   updateDependency?: (id: string, updates: Partial<IntentDependency>) => void;
+  deleteDependency?: (id: string) => void;
   isSetupPhase: boolean;
   containerRef: RefObject<HTMLDivElement | null>;
   blockRefs: RefObject<Map<string, HTMLDivElement>>;
@@ -41,6 +33,7 @@ export function useDependencyLinks({
   dependencies,
   addDependency,
   updateDependency,
+  deleteDependency,
   isSetupPhase,
   containerRef,
   blockRefs,
@@ -48,25 +41,45 @@ export function useDependencyLinks({
   collapsedBlocks,
   blockMap,
 }: UseDependencyLinksParams) {
-  const [linkMode, setLinkMode] = useState<{ fromIntentId: string } | null>(null);
   const [depCreator, setDepCreator] = useState<{
     fromIntentId: string;
     toIntentId: string;
     x: number;
     y: number;
+    depId?: string; // ID of the dependency to update
+    isEditing?: boolean; // True if editing an existing confirmed dependency
   } | null>(null);
   const [isDetectingDeps, setIsDetectingDeps] = useState(false);
   const [depLines, setDepLines] = useState<DepLine[]>([]);
   const [selectedDepId, setSelectedDepId] = useState<string | null>(null);
   const [hoveredDepId, setHoveredDepId] = useState<string | null>(null);
 
-  // Map each dependency id to a stable color from the palette
+  // Drag-to-connect state
+  const [dragState, setDragState] = useState<{
+    fromIntentId: string;
+    startX: number;
+    startY: number;
+    currentX: number;
+    currentY: number;
+  } | null>(null);
+
+  // All dependencies use the same color for consistency
   const depColorMap = useMemo(() => {
     const map = new Map<string, string>();
-    (dependencies || []).forEach((dep, idx) => {
-      map.set(dep.id, DEP_COLORS[idx % DEP_COLORS.length]);
+    (dependencies || []).forEach((dep) => {
+      map.set(dep.id, DEP_COLOR);
     });
     return map;
+  }, [dependencies]);
+
+  // Get all block IDs that have connections (for visual indicators)
+  const connectedBlockIds = useMemo(() => {
+    const ids = new Set<string>();
+    (dependencies || []).forEach((dep) => {
+      ids.add(dep.fromIntentId);
+      ids.add(dep.toIntentId);
+    });
+    return ids;
   }, [dependencies]);
 
   // Get visible descendants of a block (stops at collapsed blocks)
@@ -120,7 +133,7 @@ export function useDependencyLinks({
           dashed: dep.source === 'ai-suggested' && !dep.confirmed,
           inherited: false,
           dep,
-          color: depColorMap.get(dep.id) || DEP_COLORS[0],
+          color: DEP_COLOR,
         });
 
       });
@@ -139,38 +152,21 @@ export function useDependencyLinks({
     };
   }, [isSetupPhase, dependencies, blocks, containerRef, blockRefs, collapsedBlocks, blockMap, getVisibleDescendants, getEndpoint, depColorMap]);
 
-  // Handle clicking an intent block in link mode
-  const handleBlockClickForLink = useCallback((blockId: string, e: React.MouseEvent) => {
-    if (!linkMode || !addDependency) return;
-    if (linkMode.fromIntentId === blockId) {
-      setLinkMode(null);
-      return;
-    }
-    setDepCreator({
-      fromIntentId: linkMode.fromIntentId,
-      toIntentId: blockId,
-      x: e.clientX,
-      y: e.clientY,
-    });
-    setLinkMode(null);
-  }, [linkMode, addDependency]);
+  // Update dependency with label, type, and direction (dependency was already created in handleDragEnd)
+  const handleCreateDependency = useCallback((label: string, relationshipType: RelationshipType, direction: IntentDependency['direction']) => {
+    if (!depCreator || !updateDependency) return;
 
-  // Create dependency with label and direction
-  const handleCreateDependency = useCallback((label: string, direction: IntentDependency['direction']) => {
-    if (!depCreator || !addDependency) return;
-    addDependency({
-      id: `dep-${Date.now()}-${Math.random()}`,
-      fromIntentId: depCreator.fromIntentId,
-      toIntentId: depCreator.toIntentId,
-      label: label.trim() || 'related',
-      direction,
-      source: 'manual',
-      confirmed: true,
-      createdBy: currentUserId,
-      createdAt: Date.now(),
-    });
+    // Update the existing dependency with user's selection
+    if (depCreator.depId) {
+      updateDependency(depCreator.depId, {
+        label: label.trim() || 'Related',
+        relationshipType,
+        direction,
+        confirmed: true,
+      });
+    }
     setDepCreator(null);
-  }, [depCreator, addDependency, currentUserId]);
+  }, [depCreator, updateDependency]);
 
   // AI detect dependencies
   const handleDetectDependencies = useCallback(async () => {
@@ -189,11 +185,13 @@ export function useDependencyLinks({
             id: `dep-${Date.now()}-${Math.random()}`,
             fromIntentId: dep.fromIntentId,
             toIntentId: dep.toIntentId,
-            label: dep.label || 'related',
-            direction: dep.direction || 'directed',
+            label: dep.label || 'Related',
+            relationshipType: dep.relationshipType || 'custom',
+            direction: dep.direction || 'bidirectional',
             source: 'ai-suggested',
             confirmed: false,
             createdAt: Date.now(),
+            reason: dep.reason,
           });
         });
       }
@@ -204,30 +202,158 @@ export function useDependencyLinks({
     }
   }, [blocks, addDependency, isDetectingDeps]);
 
-  // Close dep creator on click outside
+  // Cancel dependency creation (delete unconfirmed dep and close popup)
+  // When editing an existing confirmed dependency, don't delete it
+  const handleCancelDependency = useCallback(() => {
+    if (depCreator?.depId && deleteDependency && !depCreator.isEditing) {
+      deleteDependency(depCreator.depId);
+    }
+    setDepCreator(null);
+  }, [depCreator, deleteDependency]);
+
+  // Close dep creator on click outside (cancels the dependency)
   useEffect(() => {
     if (!depCreator) return;
-    const handleClick = () => setDepCreator(null);
+    const handleClick = () => handleCancelDependency();
     const timer = setTimeout(() => document.addEventListener('click', handleClick), 0);
     return () => {
       clearTimeout(timer);
       document.removeEventListener('click', handleClick);
     };
-  }, [depCreator]);
+  }, [depCreator, handleCancelDependency]);
+
+  // Drag-to-connect handlers
+  const handleDragStart = useCallback((fromIntentId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    setDragState({
+      fromIntentId,
+      startX: e.clientX,
+      startY: e.clientY,
+      currentX: e.clientX,
+      currentY: e.clientY,
+    });
+  }, []);
+
+  const handleDragEnd = useCallback((targetIntentId: string | null, e: MouseEvent) => {
+    if (!dragState || !addDependency) {
+      setDragState(null);
+      return;
+    }
+
+    // If dropped on a valid target (different from source)
+    if (targetIntentId && targetIntentId !== dragState.fromIntentId) {
+      // First create the dependency (so line shows immediately)
+      const newDepId = `dep-${Date.now()}-${Math.random()}`;
+      addDependency({
+        id: newDepId,
+        fromIntentId: dragState.fromIntentId,
+        toIntentId: targetIntentId,
+        label: 'Unnamed',
+        relationshipType: 'custom',
+        direction: 'bidirectional',
+        source: 'manual',
+        confirmed: false, // unconfirmed until user selects type
+        createdBy: currentUserId,
+        createdAt: Date.now(),
+      });
+
+      // Then show popup to let user edit the label
+      setDepCreator({
+        fromIntentId: dragState.fromIntentId,
+        toIntentId: targetIntentId,
+        x: e.clientX,
+        y: e.clientY,
+        depId: newDepId,
+      });
+    }
+
+    setDragState(null);
+  }, [dragState, addDependency, currentUserId]);
+
+  // Track mouse movement during drag
+  useEffect(() => {
+    if (!dragState) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      setDragState(prev => prev ? { ...prev, currentX: e.clientX, currentY: e.clientY } : null);
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
+      // Find which block we're over
+      const elements = document.elementsFromPoint(e.clientX, e.clientY);
+      let targetId: string | null = null;
+
+      for (const el of elements) {
+        const blockEl = el.closest('[data-block-id]');
+        if (blockEl) {
+          targetId = blockEl.getAttribute('data-block-id');
+          break;
+        }
+      }
+
+      handleDragEnd(targetId, e);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [dragState, handleDragEnd]);
+
+  // Compute preview line coords (from source block to cursor)
+  const dragPreviewLine = useMemo(() => {
+    if (!dragState || !containerRef.current) return null;
+
+    const container = containerRef.current;
+    const containerRect = container.getBoundingClientRect();
+    const scrollTop = container.scrollTop;
+
+    const fromEl = blockRefs.current.get(dragState.fromIntentId);
+    if (!fromEl) return null;
+
+    const fromRect = fromEl.getBoundingClientRect();
+
+    return {
+      x1: fromRect.right - containerRect.left,
+      y1: fromRect.top + fromRect.height / 2 - containerRect.top + scrollTop,
+      x2: dragState.currentX - containerRect.left,
+      y2: dragState.currentY - containerRect.top + scrollTop,
+    };
+  }, [dragState, containerRef, blockRefs]);
+
+  // Open edit popup for an existing dependency
+  const openEditPopup = useCallback((dep: IntentDependency, x: number, y: number) => {
+    setDepCreator({
+      fromIntentId: dep.fromIntentId,
+      toIntentId: dep.toIntentId,
+      x,
+      y,
+      depId: dep.id,
+      isEditing: dep.confirmed, // Only mark as editing if it was already confirmed
+    });
+  }, []);
 
   return {
-    linkMode,
-    setLinkMode,
     depCreator,
     depLines,
     isDetectingDeps,
-    handleBlockClickForLink,
     handleCreateDependency,
+    handleCancelDependency,
     handleDetectDependencies,
     selectedDepId,
     setSelectedDepId,
     hoveredDepId,
     setHoveredDepId,
     depColorMap,
+    connectedBlockIds,
+    // Drag-to-connect
+    dragState,
+    handleDragStart,
+    dragPreviewLine,
+    // Edit existing dependency
+    openEditPopup,
   };
 }

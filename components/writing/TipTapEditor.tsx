@@ -188,92 +188,118 @@ function findTextRange(fullText: string, anchor: SentenceAnchor): { from: number
   return { from: startIdx + 1, to: endIdx + 1 };
 }
 
-// Create inline widget for missing intent - lightweight style similar to orphan widget
-function createMissingIntentWidget(
-  intentId: string,
-  intentContent: string,
-  status: 'partial' | 'missing',
-  note?: string,
-  onAddContent?: (intentId: string, intentContent: string) => void
+// Create subtle issue indicator dot - clicks to expand detail panel
+function createIssueIndicatorDot(
+  issueCount: number,
+  issueType: 'orphan' | 'partial' | 'missing' | 'conflict',
+  dataAttrs: Record<string, string>
 ) {
   const widget = document.createElement('span');
-  widget.className = 'missing-intent-widget inline-flex items-center gap-1.5 ml-1 align-baseline text-[10px]';
+  widget.className = 'issue-indicator-dot ml-0.5 inline-flex items-center cursor-pointer';
   widget.contentEditable = 'false';
 
-  const statusLabel = status === 'missing' ? 'Missing' : 'Partial';
-
-  // Truncate long content
-  const truncatedContent = intentContent.length > 40
-    ? intentContent.slice(0, 40) + '...'
-    : intentContent;
-
-  const contentEscaped = truncatedContent
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-
-  // Use complete class names for Tailwind JIT compatibility
-  const labelClasses = status === 'missing'
-    ? 'text-red-600 dark:text-red-400'
-    : 'text-amber-600 dark:text-amber-400';
-
-  const contentClasses = status === 'missing'
-    ? 'text-red-700 dark:text-red-300'
-    : 'text-amber-700 dark:text-amber-300';
+  // Color based on issue type
+  const colorClasses = {
+    orphan: 'bg-amber-400 hover:bg-amber-500',
+    partial: 'bg-yellow-400 hover:bg-yellow-500',
+    missing: 'bg-blue-400 hover:bg-blue-500',
+    conflict: 'bg-red-400 hover:bg-red-500',
+  };
 
   widget.innerHTML = `
-    <span class="${labelClasses} font-medium">${statusLabel}:</span>
-    <span class="${contentClasses} italic">${contentEscaped}</span>
-    <span class="inline-flex items-center gap-1 ml-0.5">
-      <button
-        class="add-content-btn text-[9px] font-medium text-blue-600 dark:text-blue-400 hover:underline transition-colors whitespace-nowrap"
-        data-intent-id="${intentId}"
-        data-intent-content="${contentEscaped}"
-      >Change Writing</button>
-      <span class="text-muted-foreground">·</span>
-      <button
-        class="modify-intent-btn text-[9px] text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
-        data-intent-id="${intentId}"
-      >Modify Intention</button>
-    </span>
+    <span
+      class="issue-dot inline-flex items-center justify-center h-4 w-4 rounded-full text-white text-xs font-medium ${colorClasses[issueType]} transition-colors"
+      data-issue-type="${issueType}"
+      ${Object.entries(dataAttrs).map(([k, v]) => `data-${k}="${v.replace(/"/g, '&quot;')}"`).join(' ')}
+      title="Click to see details"
+    >${issueCount > 1 ? issueCount : ''}</span>
   `;
 
   return widget;
 }
 
-// Create inline widget for orphan content - lightweight style
+// Create expanded issue detail panel - shown when dot is clicked
+function createIssueDetailPanel(
+  issues: Array<{
+    type: 'orphan' | 'partial' | 'missing';
+    content: string;
+    intentId?: string;
+    orphanStart?: string;
+    suggestedIntent?: string;
+  }>
+) {
+  const panel = document.createElement('div');
+  panel.className = 'issue-detail-panel mt-2 mb-2 p-3 rounded-lg border bg-muted/50 text-sm';
+  panel.contentEditable = 'false';
+
+  const issueListHtml = issues.map((issue, idx) => {
+    const typeLabel = issue.type === 'orphan' ? 'Orphan' : issue.type === 'partial' ? 'Partial' : 'Missing';
+    const colorClass = issue.type === 'orphan' ? 'text-amber-600 dark:text-amber-400' :
+                       issue.type === 'partial' ? 'text-yellow-600 dark:text-yellow-400' :
+                       'text-blue-600 dark:text-blue-400';
+
+    const contentEscaped = (issue.content || '').slice(0, 60)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    const suggestedEscaped = (issue.suggestedIntent || '').slice(0, 60)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+
+    const dataAttrs = issue.type === 'orphan'
+      ? `data-orphan-start="${(issue.orphanStart || '').replace(/"/g, '&quot;')}" data-suggested-intent="${suggestedEscaped}"`
+      : `data-intent-id="${issue.intentId || ''}"`;
+
+    return `
+      <div class="py-1.5 ${idx > 0 ? 'border-t' : ''}">
+        <div class="flex items-start gap-2">
+          <span class="${colorClass} font-medium text-xs">${typeLabel}:</span>
+          <span class="text-muted-foreground text-xs flex-1">${contentEscaped}${issue.content.length > 60 ? '...' : ''}</span>
+        </div>
+        <div class="mt-1.5 flex gap-2">
+          ${issue.type === 'orphan' ? `
+            <button class="make-change-btn text-xs text-blue-600 dark:text-blue-400 hover:underline" ${dataAttrs}>Add to Outline</button>
+            <span class="text-muted-foreground">·</span>
+            <button class="add-writing-btn text-xs text-muted-foreground hover:text-foreground" data-orphan-start="${(issue.orphanStart || '').replace(/"/g, '&quot;')}">Dismiss</button>
+          ` : `
+            <button class="add-content-btn text-xs text-blue-600 dark:text-blue-400 hover:underline" ${dataAttrs}>Change Writing</button>
+            <span class="text-muted-foreground">·</span>
+            <button class="modify-intent-btn text-xs text-muted-foreground hover:text-foreground" ${dataAttrs}>Modify Intent</button>
+          `}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  panel.innerHTML = `
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-xs font-medium text-muted-foreground">${issues.length} issue${issues.length > 1 ? 's' : ''}</span>
+      <button class="close-panel-btn p-0.5 hover:bg-secondary rounded text-muted-foreground hover:text-foreground">
+        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="space-y-0">${issueListHtml}</div>
+  `;
+
+  return panel;
+}
+
+// Create inline widget for orphan content - now uses subtle dot indicator
 function createOrphanWidget(orphan: OrphanSentence) {
-  const widget = document.createElement('span');
-  widget.className = 'orphan-widget inline-flex items-center gap-1.5 ml-1 align-baseline text-[10px]';
-  widget.contentEditable = 'false';
-
   const intentText = orphan.suggestedIntent || 'Unmatched content';
-
-  // Escape HTML for safe display
   const intentEscaped = intentText
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 
-  widget.innerHTML = `
-    <span class="text-amber-600 dark:text-amber-400 font-medium">New Intent?</span>
-    <span class="text-amber-700 dark:text-amber-300 italic">${intentEscaped}</span>
-    <span class="inline-flex items-center gap-1 ml-0.5">
-      <button
-        class="make-change-btn text-[9px] font-medium text-blue-600 dark:text-blue-400 hover:underline transition-colors whitespace-nowrap"
-        data-suggested-intent="${intentEscaped}"
-        data-orphan-start="${orphan.start.replace(/"/g, '&quot;')}"
-      >Add to Outline</button>
-      <span class="text-muted-foreground">·</span>
-      <button
-        class="add-writing-btn text-[9px] text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
-        data-orphan-start="${orphan.start.replace(/"/g, '&quot;')}"
-      >Modify Writing</button>
-    </span>
-  `;
-
-  return widget;
+  return createIssueIndicatorDot(1, 'orphan', {
+    'orphan-start': orphan.start,
+    'suggested-intent': intentEscaped,
+  });
 }
 
 // Create simulated writing widget
@@ -300,10 +326,10 @@ function createSimulatedWritingWidget(
 
   widget.innerHTML = `
     <div class="flex items-center gap-2 mb-1.5">
-      <span class="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300">
+      <span class="text-xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300">
         Simulated
       </span>
-      <span class="text-[10px] text-muted-foreground italic">
+      <span class="text-xs text-muted-foreground italic">
         For: "${intentEscaped}${intentContent.length > 40 ? '...' : ''}"
       </span>
     </div>
@@ -490,16 +516,13 @@ function createHighlightPlugin(
             // Clamp to valid range
             insertPos = Math.min(Math.max(1, insertPos), doc.content.size - 1);
 
-            // Create and add the widget
-            const widgetStatus = current.status as 'partial' | 'missing';
+            // Create subtle dot indicator for missing/partial intent
+            const issueType = current.status === 'missing' ? 'missing' : 'partial';
             decorations.push(
-              Decoration.widget(insertPos, () => createMissingIntentWidget(
-                current.intentId,
-                current.intentContent,
-                widgetStatus,
-                current.note,
-                onAddMissingContent
-              ), {
+              Decoration.widget(insertPos, () => createIssueIndicatorDot(1, issueType, {
+                'intent-id': current.intentId,
+                'intent-content': current.intentContent.slice(0, 60),
+              }), {
                 side: 0, // Insert before
               })
             );
@@ -508,7 +531,7 @@ function createHighlightPlugin(
 
         if (!sentenceHighlights) return DecorationSet.create(doc, decorations);
 
-        // Always show orphan content with underline + widget (not dependent on hover)
+        // Show orphan indicators - subtle dot at end of orphan sentence (no wavy underline)
         sentenceHighlights.orphan.forEach((orphan) => {
           // Skip orphans that have been handled (added to outline or dismissed)
           if (handledOrphanStarts?.has(orphan.start)) {
@@ -522,20 +545,14 @@ function createHighlightPlugin(
               const isBeingModified = modifyingOrphanStart === orphan.start;
 
               if (isBeingModified) {
-                // Show "being modified" highlight (light blue/purple) - no widget
+                // Show subtle highlight when being modified
                 decorations.push(
                   Decoration.inline(range.from, range.to, {
-                    class: "bg-blue-100 dark:bg-blue-900/40 rounded px-0.5 transition-colors",
+                    class: "bg-muted/50 rounded transition-colors",
                   })
                 );
               } else {
-                // Normal orphan: underline + widget
-                decorations.push(
-                  Decoration.inline(range.from, range.to, {
-                    class: "underline decoration-amber-400 decoration-wavy decoration-1 underline-offset-2",
-                  })
-                );
-                // Widget at the end with "add intent" button
+                // Only show dot indicator at end - no inline decoration
                 decorations.push(
                   Decoration.widget(range.to, () => createOrphanWidget(orphan), {
                     side: 1,
@@ -546,30 +563,29 @@ function createHighlightPlugin(
           }
         });
 
-        // Hovered intent from left panel - show supporting sentences
-        // Green for covered, amber for partial
+        // Hovered intent from left panel - show supporting sentences with subtle underline (not background)
         if (hoveredIntentForLink) {
-          // Check covered (green)
+          // Check covered - subtle underline
           sentenceHighlights.supporting.forEach(({ anchor, intentIds }) => {
             if (intentIds.includes(hoveredIntentForLink)) {
               const range = findTextRangeInDoc(doc, anchor);
               if (range) {
                 decorations.push(
                   Decoration.inline(range.from, range.to, {
-                    class: "bg-emerald-200 dark:bg-emerald-700 rounded px-0.5 transition-colors",
+                    class: "underline decoration-emerald-400 decoration-1 underline-offset-2 transition-colors",
                   })
                 );
               }
             }
           });
-          // Check partial (amber)
+          // Check partial - subtle underline
           sentenceHighlights.partial.forEach(({ anchor, intentIds }) => {
             if (intentIds.includes(hoveredIntentForLink)) {
               const range = findTextRangeInDoc(doc, anchor);
               if (range) {
                 decorations.push(
                   Decoration.inline(range.from, range.to, {
-                    class: "bg-amber-200 dark:bg-amber-700 rounded px-0.5 transition-colors",
+                    class: "underline decoration-amber-400 decoration-1 underline-offset-2 transition-colors",
                   })
                 );
               }
@@ -577,7 +593,7 @@ function createHighlightPlugin(
           });
         }
 
-        // Hovered orphan from left panel - highlight amber
+        // Hovered orphan from left panel - subtle underline
         if (hoveredOrphanHint) {
           const orphan = sentenceHighlights.orphan.find(o => o.start === hoveredOrphanHint);
           if (orphan) {
@@ -585,37 +601,36 @@ function createHighlightPlugin(
             if (range) {
               decorations.push(
                 Decoration.inline(range.from, range.to, {
-                  class: "bg-amber-200 dark:bg-amber-700 rounded px-0.5 transition-colors",
+                  class: "underline decoration-amber-400 decoration-1 underline-offset-2 transition-colors",
                 })
               );
             }
           }
         }
 
-        // Hovered from writing side (local hover) - highlight supporting sentences
-        // Green for covered, amber for partial
+        // Hovered from writing side (local hover) - subtle underline (not background)
         if (localHoveredIntent && !hoveredIntentForLink) {
-          // Check covered (green)
+          // Check covered - subtle underline
           sentenceHighlights.supporting.forEach(({ anchor, intentIds }) => {
             if (intentIds.includes(localHoveredIntent)) {
               const range = findTextRangeInDoc(doc, anchor);
               if (range) {
                 decorations.push(
                   Decoration.inline(range.from, range.to, {
-                    class: "bg-emerald-100 dark:bg-emerald-800/50 rounded px-0.5 transition-colors",
+                    class: "underline decoration-emerald-300 decoration-1 underline-offset-2 transition-colors",
                   })
                 );
               }
             }
           });
-          // Check partial (amber)
+          // Check partial - subtle underline
           sentenceHighlights.partial.forEach(({ anchor, intentIds }) => {
             if (intentIds.includes(localHoveredIntent)) {
               const range = findTextRangeInDoc(doc, anchor);
               if (range) {
                 decorations.push(
                   Decoration.inline(range.from, range.to, {
-                    class: "bg-amber-100 dark:bg-amber-800/50 rounded px-0.5 transition-colors",
+                    class: "underline decoration-amber-300 decoration-1 underline-offset-2 transition-colors",
                   })
                 );
               }
@@ -784,7 +799,7 @@ export default function TipTapEditor({
     ],
     editorProps: {
       attributes: {
-        class: "outline-none min-h-[150px] prose prose-sm max-w-none p-3",
+        class: "outline-none min-h-[150px] prose max-w-none p-4",
       },
     },
   }, [doc]); // Recreate when doc changes
@@ -861,12 +876,61 @@ export default function TipTapEditor({
     highlightRangesRef.current = ranges;
   }, [editor, sentenceHighlights]);
 
-  // Handle clicks on orphan widget buttons
+  // Handle clicks on issue indicator dots and action buttons
   useEffect(() => {
     if (!editor) return;
 
     const handleClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
+
+      // Handle click on issue indicator dot - expand to show detail panel
+      const issueDot = target.closest('.issue-dot') as HTMLElement | null;
+      if (issueDot) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const issueType = issueDot.dataset.issueType as 'orphan' | 'partial' | 'missing';
+        const parentWidget = issueDot.closest('.issue-indicator-dot');
+
+        // Check if panel already exists
+        const existingPanel = parentWidget?.nextElementSibling?.classList.contains('issue-detail-panel');
+        if (existingPanel) {
+          parentWidget?.nextElementSibling?.remove();
+          return;
+        }
+
+        // Create and insert detail panel
+        if (issueType === 'orphan') {
+          const orphanStart = issueDot.dataset.orphanStart || '';
+          const suggestedIntent = issueDot.dataset.suggestedIntent || '';
+          const panel = createIssueDetailPanel([{
+            type: 'orphan',
+            content: suggestedIntent,
+            orphanStart,
+            suggestedIntent,
+          }]);
+          parentWidget?.insertAdjacentElement('afterend', panel);
+        } else {
+          const intentId = issueDot.dataset.intentId || '';
+          const intentContent = issueDot.dataset.intentContent || '';
+          const panel = createIssueDetailPanel([{
+            type: issueType,
+            content: intentContent,
+            intentId,
+          }]);
+          parentWidget?.insertAdjacentElement('afterend', panel);
+        }
+        return;
+      }
+
+      // Handle close panel button
+      const closePanelBtn = target.closest('.close-panel-btn') as HTMLElement | null;
+      if (closePanelBtn) {
+        event.preventDefault();
+        event.stopPropagation();
+        closePanelBtn.closest('.issue-detail-panel')?.remove();
+        return;
+      }
 
       // Handle "Make Change to Outline" button
       const makeChangeBtn = target.closest('.make-change-btn') as HTMLElement | null;
@@ -877,11 +941,13 @@ export default function TipTapEditor({
         const orphanStart = makeChangeBtn.dataset.orphanStart;
         if (suggestedIntent && orphanStart) {
           onMakeChangeToOutline(suggestedIntent, orphanStart);
+          // Close the panel
+          makeChangeBtn.closest('.issue-detail-panel')?.remove();
         }
         return;
       }
 
-      // Handle "Modify Writing" button - highlight sentence for modification
+      // Handle "Modify Writing" / "Dismiss" button - highlight sentence for modification
       const addWritingBtn = target.closest('.add-writing-btn') as HTMLElement | null;
       if (addWritingBtn) {
         event.preventDefault();
@@ -894,6 +960,8 @@ export default function TipTapEditor({
           markOrphanHandled?.(orphanStart);
           // Also notify parent if needed
           onDismissOrphan?.(orphanStart);
+          // Close the panel
+          addWritingBtn.closest('.issue-detail-panel')?.remove();
         }
         return;
       }
@@ -907,6 +975,8 @@ export default function TipTapEditor({
         const intentContent = addContentBtn.dataset.intentContent;
         if (intentId && intentContent) {
           onAddMissingContent(intentId, intentContent);
+          // Close the panel
+          addContentBtn.closest('.issue-detail-panel')?.remove();
         }
         return;
       }
@@ -919,6 +989,8 @@ export default function TipTapEditor({
         const intentId = modifyIntentBtn.dataset.intentId;
         if (intentId) {
           onModifyIntent(intentId);
+          // Close the panel
+          modifyIntentBtn.closest('.issue-detail-panel')?.remove();
         }
         return;
       }
@@ -1079,7 +1151,7 @@ export default function TipTapEditor({
               onClick={onCheckAlignment}
               disabled={isCheckingAlignment}
               className={`
-                flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors
+                flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium transition-colors
                 ${isCheckingAlignment
                   ? "bg-blue-100 text-blue-600 cursor-wait"
                   : "bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground"
@@ -1154,7 +1226,7 @@ export default function TipTapEditor({
       )}
 
       {/* Footer */}
-      <div className="mt-2 px-3 text-[10px] text-muted-foreground text-right">
+      <div className="mt-2 px-3 text-xs text-muted-foreground text-right">
         {mounted ? new Date(writingBlock.updatedAt).toLocaleTimeString() : "\u00A0"}
       </div>
     </div>

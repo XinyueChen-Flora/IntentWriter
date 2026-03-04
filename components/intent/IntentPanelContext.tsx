@@ -59,6 +59,8 @@ export type ActiveDiffSession = {
   sectionImpacts: Map<string, SectionImpactData>;
 };
 
+export type SetupTab = 'outline' | 'assign' | 'relationships';
+
 export type IntentPanelContextValue = {
   // Hierarchy data
   blockMap: Map<string, IntentBlock[]>;
@@ -69,15 +71,13 @@ export type IntentPanelContextValue = {
   selectedBlockId: string | null;
   dragOverId: string | null;
   activeId: string | null;
-  linkMode: { fromIntentId: string } | null;
   isSetupPhase: boolean;
+  activeSetupTab: SetupTab;
   // UI state setters
   setEditingBlock: (id: string | null) => void;
   setHoveredBlock: (id: string | null) => void;
   setSelectedBlockId: (id: string | null) => void;
   toggleCollapse: (id: string) => void;
-  setLinkMode: (mode: { fromIntentId: string } | null) => void;
-  handleBlockClickForLink: (blockId: string, e: React.MouseEvent) => void;
   // Block operations
   addBlock: (options?: { afterBlockId?: string; beforeBlockId?: string; asChildOf?: string }) => IntentBlock;
   updateBlock: (blockId: string, content: string) => void;
@@ -99,6 +99,11 @@ export type IntentPanelContextValue = {
   hoveredDepId: string | null;
   setHoveredDepId: (id: string | null) => void;
   depColorMap: Map<string, string>;
+  // Drag-to-connect
+  isDraggingConnection: boolean;
+  handleConnectionDragStart: (fromIntentId: string, e: React.MouseEvent) => void;
+  // Connected block IDs (for visual indicators)
+  connectedBlockIds: Set<string>;
   // Writing
   intentToWritingMap: Map<string, WritingBlock>;
   roomId: string;

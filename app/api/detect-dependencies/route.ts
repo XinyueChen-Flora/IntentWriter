@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { requireAuth, isErrorResponse, withErrorHandler } from "@/lib/api/middleware";
+import { RELATIONSHIP_TYPES } from "@/lib/relationship-types";
+
+// Valid relationship types for AI detection
+const VALID_TYPES = RELATIONSHIP_TYPES.map(t => t.value);
 
 export const POST = withErrorHandler(async (request: Request) => {
   const authResult = await requireAuth();
@@ -33,6 +37,11 @@ export const POST = withErrorHandler(async (request: Request) => {
     );
   }
 
+  // Build relationship types description for the prompt
+  const typesDescription = RELATIONSHIP_TYPES.map(t =>
+    `- "${t.value}": ${t.description}`
+  ).join('\n');
+
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -44,21 +53,36 @@ export const POST = withErrorHandler(async (request: Request) => {
       messages: [
         {
           role: "system",
-          content: `You analyze a collaborative writing outline and find hidden relationships between sections that writers might overlook.
+          content: `You analyze a collaborative writing outline and find relationships between sections.
+
+RELATIONSHIP TYPES with DIRECTION (from → to):
+- "depends-on": FROM requires information/concepts that are defined in TO. Example: "Methods depends-on Background" means Methods needs Background to be understood.
+- "builds-upon": FROM extends or elaborates on ideas introduced in TO. Example: "Discussion builds-upon Results" means Discussion takes Results further.
+- "supports": FROM provides evidence or backing for claims in TO. Example: "Data supports Hypothesis" means Data backs up Hypothesis.
+- "must-be-consistent": FROM and TO must not contradict each other. Direction doesn't matter here.
+- "contrasts-with": FROM presents a different perspective than TO. Direction doesn't matter here.
+
+DIRECTION IS CRITICAL:
+- For "depends-on": FROM is the section that NEEDS the other. TO is the section that provides the prerequisite.
+- For "builds-upon": FROM is the section that EXTENDS. TO is the section being extended.
+- For "supports": FROM is the evidence. TO is the claim being supported.
 
 RULES:
-- Do NOT flag parent-child pairs that are already in the tree — those are obvious.
-- Focus on CROSS-BRANCH relationships: sections under different parents that affect each other.
-- Each dependency gets a short human-readable "label" (≤15 characters) describing HOW they relate. Use the same language as the outline. Examples: "must be consistent", "provides evidence", "prerequisite for", "scope overlap", "may contradict".
-- Each dependency has a "direction":
-  - "directed" means A affects/constrains B (one-way influence)
-  - "bidirectional" means they mutually constrain each other
-- Be selective. Only suggest relationships that are genuinely useful for writers to be aware of. 3–6 suggestions for a typical outline is plenty.
+- Do NOT flag parent-child pairs already in the tree.
+- Focus on CROSS-BRANCH relationships between different sections.
+- Be selective: 3–6 suggestions for a typical outline.
+- Reason should explain the relationship clearly.
 
-Return a JSON array. Each object has:
-  { "fromIntentId": "...", "toIntentId": "...", "label": "...", "direction": "directed" | "bidirectional" }
+Return a JSON array:
+{
+  "fromIntentId": "id of the FROM section",
+  "toIntentId": "id of the TO section",
+  "relationshipType": "depends-on" | "must-be-consistent" | "builds-upon" | "contrasts-with" | "supports",
+  "label": "Depends on" | "Must be consistent" | "Builds upon" | "Contrasts with" | "Supports",
+  "reason": "One sentence: '[FROM section] [relationship verb] [TO section] because...'"
+}
 
-Return ONLY the JSON array, no markdown fences or other text.`,
+Return ONLY the JSON array, no markdown.`,
         },
         {
           role: "user",
@@ -101,9 +125,14 @@ Return ONLY the JSON array, no markdown fences or other text.`,
       intentIds.has(d.fromIntentId) &&
       intentIds.has(d.toIntentId) &&
       typeof d.label === "string" &&
-      d.label.length > 0 &&
-      ["directed", "bidirectional"].includes(d.direction)
-  );
+      d.label.length > 0
+  ).map((d: any) => ({
+    ...d,
+    // Ensure relationshipType is valid, default to custom if not
+    relationshipType: VALID_TYPES.includes(d.relationshipType) ? d.relationshipType : 'custom',
+    // Default direction to bidirectional
+    direction: 'bidirectional',
+  }));
 
   return NextResponse.json({
     dependencies: validDeps,

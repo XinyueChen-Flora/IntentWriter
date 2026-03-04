@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Logo } from "@/components/common/Logo";
 
 export default function RegisterPage() {
   const [email, setEmail] = useState("");
@@ -71,8 +72,11 @@ export default function RegisterPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
       <Card className="w-full max-w-md">
-        <CardHeader className="space-y-1">
-          <CardTitle className="text-2xl font-bold">Create an account</CardTitle>
+        <CardHeader className="space-y-3">
+          <Link href="/" className="flex justify-center mb-2">
+            <Logo size={32} textClassName="text-xl" />
+          </Link>
+          <CardTitle className="text-2xl">Create an account</CardTitle>
           <CardDescription>
             Enter your information below to create your account
           </CardDescription>

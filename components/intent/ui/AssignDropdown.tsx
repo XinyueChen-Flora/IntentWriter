@@ -67,7 +67,7 @@ export function AssignDropdown({
             (block.assigneeName || block.assigneeEmail || 'U').substring(0, 2).toUpperCase()
           )}
         </div>
-        <span className={`font-medium ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
+        <span className={`font-medium ${compact ? 'text-xs' : 'text-sm'}`}>
           {block.assignee === currentUser.id
             ? 'You'
             : block.assigneeName || block.assigneeEmail?.split('@')[0] || 'User'}
@@ -82,7 +82,7 @@ export function AssignDropdown({
       <button
         onClick={() => setIsOpen(!isOpen)}
         className={`flex items-center gap-1 text-muted-foreground hover:text-primary transition-colors ${
-          compact ? 'text-[10px]' : 'text-[11px]'
+          compact ? 'text-xs' : 'text-sm'
         }`}
       >
         <UserPlus className={compact ? 'h-3 w-3' : 'h-3.5 w-3.5'} />
@@ -108,7 +108,7 @@ export function AssignDropdown({
                 >
                   <div className="relative flex-shrink-0">
                     <div
-                      className="h-6 w-6 rounded-full overflow-hidden flex items-center justify-center text-[10px] font-semibold text-white"
+                      className="h-6 w-6 rounded-full overflow-hidden flex items-center justify-center text-xs font-semibold text-white"
                       style={!avatar ? { backgroundColor: getUserColor(member.userId) } : undefined}
                     >
                       {avatar ? (
@@ -130,7 +130,7 @@ export function AssignDropdown({
                         <span className="text-muted-foreground font-normal ml-1">(You)</span>
                       )}
                     </div>
-                    <div className="text-[10px] text-muted-foreground truncate">
+                    <div className="text-xs text-muted-foreground truncate">
                       {member.email}
                       {member.role === 'owner' && ' · Owner'}
                     </div>

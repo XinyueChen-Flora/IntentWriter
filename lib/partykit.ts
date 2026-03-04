@@ -2,6 +2,10 @@
 
 import { useState, useCallback } from "react";
 import usePartySocket from "partysocket/react";
+import type { RelationshipType } from "./relationship-types";
+
+// Re-export relationship types from shared module
+export { RELATIONSHIP_TYPES, type RelationshipType } from "./relationship-types";
 
 export type WritingBlock = {
   id: string;
@@ -53,11 +57,13 @@ export type IntentDependency = {
   fromIntentId: string;
   toIntentId: string;
   label: string;
+  relationshipType: RelationshipType;
   direction: 'directed' | 'bidirectional';
   source: 'manual' | 'ai-suggested' | 'ai-confirmed';
   confirmed: boolean;
   createdBy?: string;
   createdAt: number;
+  reason?: string; // AI explanation for why this relationship exists
 };
 
 export type RoomState = {

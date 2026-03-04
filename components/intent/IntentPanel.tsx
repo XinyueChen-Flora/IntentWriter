@@ -4,7 +4,7 @@ import type { IntentBlock, WritingBlock, OnlineUser, RoomMeta, IntentDependency 
 import type { DocumentMember } from "@/lib/types";
 import type { User } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
-import { Plus, Sparkles, CheckCircle2, RotateCcw } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import ImportMarkdownDialog from "./ImportMarkdownDialog";
 import {
@@ -27,6 +27,18 @@ import { useDriftDetection } from './hooks/useDriftDetection';
 import { SortableBlockItem } from './ui/SortableBlockItem';
 import { IntentBlockCard } from './IntentBlockCard';
 import { IntentPanelProvider } from './IntentPanelContext';
+import { StartOutlineGuide } from './onboarding';
+import {
+  SetupTabBar,
+  OutlineInstructionBar,
+  AssignInstructionBar,
+  RelationshipsInstructionBar,
+  type SetupTab,
+} from './setup';
+import {
+  RelationshipCreatorPopup,
+  RelationshipSidePanel,
+} from './relationship';
 
 type IntentPanelProps = {
   blocks: readonly IntentBlock[];
@@ -60,77 +72,6 @@ type IntentPanelProps = {
   onStartWriting?: () => void;
   onBackToSetup?: () => void;
 };
-
-function DepCreatorPopup({
-  x,
-  y,
-  onCreate,
-  onCancel,
-}: {
-  x: number;
-  y: number;
-  onCreate: (label: string, direction: 'directed' | 'bidirectional') => void;
-  onCancel: () => void;
-}) {
-  const [label, setLabel] = useState('');
-  const [direction, setDirection] = useState<'directed' | 'bidirectional'>('directed');
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  const handleSubmit = () => {
-    onCreate(label, direction);
-  };
-
-  return (
-    <div
-      className="fixed z-50 bg-popover border rounded-lg shadow-lg p-3 w-[220px]"
-      style={{ left: x, top: y }}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <div className="text-xs font-semibold text-muted-foreground mb-2">Describe relationship</div>
-      <input
-        ref={inputRef}
-        type="text"
-        value={label}
-        onChange={(e) => setLabel(e.target.value.slice(0, 15))}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') handleSubmit();
-          if (e.key === 'Escape') onCancel();
-        }}
-        placeholder="e.g. must be consistent"
-        className="w-full px-2 py-1.5 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-primary mb-2"
-        maxLength={15}
-      />
-      <div className="flex items-center gap-2 mb-2">
-        <button
-          onClick={() => setDirection('directed')}
-          className={`flex-1 text-xs py-1 rounded border text-center transition-colors ${
-            direction === 'directed' ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-secondary'
-          }`}
-        >
-          A → B
-        </button>
-        <button
-          onClick={() => setDirection('bidirectional')}
-          className={`flex-1 text-xs py-1 rounded border text-center transition-colors ${
-            direction === 'bidirectional' ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-secondary'
-          }`}
-        >
-          A ↔ B
-        </button>
-      </div>
-      <button
-        onClick={handleSubmit}
-        className="w-full text-xs py-1.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-      >
-        Add Link
-      </button>
-    </div>
-  );
-}
 
 export default function IntentPanel({
   blocks,
@@ -177,6 +118,9 @@ export default function IntentPanel({
   const [hoveredIntentFromWriting, setHoveredIntentFromWriting] = useState<string | null>(null);
   // Track orphans that have been handled (added to outline or dismissed via "Modify Writing")
   const [handledOrphanStarts, setHandledOrphanStarts] = useState<Set<string>>(new Set());
+
+  // Setup phase tab navigation
+  const [activeSetupTab, setActiveSetupTab] = useState<SetupTab>('outline');
 
   const markOrphanHandled = useCallback((orphanStart: string) => {
     setHandledOrphanStarts(prev => new Set(prev).add(orphanStart));
@@ -238,6 +182,7 @@ export default function IntentPanel({
     dependencies,
     addDependency,
     updateDependency,
+    deleteDependency,
     isSetupPhase,
     containerRef,
     blockRefs,
@@ -330,14 +275,12 @@ export default function IntentPanel({
     selectedBlockId,
     dragOverId: dragDrop.dragOverId,
     activeId: dragDrop.activeId,
-    linkMode: depLinks.linkMode,
     isSetupPhase,
+    activeSetupTab,
     setEditingBlock,
     setHoveredBlock,
     setSelectedBlockId,
     toggleCollapse,
-    setLinkMode: depLinks.setLinkMode,
-    handleBlockClickForLink: depLinks.handleBlockClickForLink,
     addBlock,
     updateBlock,
     deleteBlock,
@@ -356,6 +299,10 @@ export default function IntentPanel({
     hoveredDepId: depLinks.hoveredDepId,
     setHoveredDepId: depLinks.setHoveredDepId,
     depColorMap: depLinks.depColorMap,
+    // Drag-to-connect
+    isDraggingConnection: !!depLinks.dragState,
+    handleConnectionDragStart: depLinks.handleDragStart,
+    connectedBlockIds: depLinks.connectedBlockIds,
     intentToWritingMap,
     roomId,
     writingBlocks,
@@ -396,11 +343,11 @@ export default function IntentPanel({
     getSectionImpact,
   }), [
     blockMap, collapsedBlocks, editingBlock, hoveredBlock, selectedBlockId,
-    dragDrop.dragOverId, dragDrop.activeId, depLinks.linkMode, isSetupPhase,
-    toggleCollapse, depLinks.setLinkMode, depLinks.handleBlockClickForLink,
+    dragDrop.dragOverId, dragDrop.activeId, isSetupPhase, activeSetupTab,
+    toggleCollapse,
     addBlock, updateBlock, deleteBlock, indentBlock, outdentBlock,
     assignBlock, unassignBlock, currentUser, documentMembers, onlineUserIds, userAvatarMap,
-    dependencies, addDependency, depLinks.selectedDepId, depLinks.setSelectedDepId, depLinks.hoveredDepId, depLinks.setHoveredDepId, depLinks.depColorMap, intentToWritingMap, roomId, writingBlocks, deleteWritingBlock,
+    dependencies, addDependency, depLinks.selectedDepId, depLinks.setSelectedDepId, depLinks.hoveredDepId, depLinks.setHoveredDepId, depLinks.depColorMap, depLinks.connectedBlockIds, depLinks.dragState, depLinks.handleDragStart, intentToWritingMap, roomId, writingBlocks, deleteWritingBlock,
     updateIntentBlockRaw, onRegisterYjsExporter, onRegisterMarkdownExporter, blocks, registerBlockRef,
     drift.checkingIds, drift.triggerCheck, drift.getDriftStatus, drift.getSentenceHighlights, drift.getConflictForDependency, drift.getSimulatedOutline, drift.hasSimulatedOutline,
     hoveredIntentForLink, setHoveredIntentForLink, hoveredOrphanHint, setHoveredOrphanHint, hoveredIntentFromWriting, setHoveredIntentFromWriting,
@@ -420,95 +367,80 @@ export default function IntentPanel({
       onDragEnd={dragDrop.handleDragEnd}
     >
       <div className="h-full flex flex-col overflow-hidden">
-        {/* Column sub-header */}
-        <div className="flex-shrink-0 border-b bg-muted/30">
-          <div className="flex flex-row gap-4 px-4 py-2 items-center">
-            <div className={`${isSetupPhase ? 'w-full' : 'w-[30%] flex-shrink-0'} flex items-center justify-between`}>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  {isSetupPhase ? 'Outline Setup' : 'Outline'}
-                </span>
-                {depLinks.linkMode && (
-                  <span className="text-[10px] bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 px-2 py-0.5 rounded-full animate-pulse">
-                    Click another intent to link
-                  </span>
-                )}
-              </div>
-              <div className="flex gap-1.5">
-                {isSetupPhase && addDependency && (
-                  <Button
-                    onClick={depLinks.handleDetectDependencies}
-                    size="sm"
-                    variant="outline"
-                    className="h-7 text-xs"
-                    disabled={depLinks.isDetectingDeps || blocks.length < 2}
-                  >
-                    <Sparkles className="h-3 w-3 mr-1" />
-                    {depLinks.isDetectingDeps ? 'Detecting...' : 'AI Detect Dependencies'}
-                  </Button>
-                )}
-                {importMarkdown && (
-                  <ImportMarkdownDialog onImport={importMarkdown} />
-                )}
-                <Button onClick={handleAddBlock} size="sm" variant="outline" className="h-7 text-xs">
-                  <Plus className="h-3 w-3 mr-1" />
-                  Add
-                </Button>
-              </div>
-            </div>
-            {!isSetupPhase && (
-              <>
-                <div className="w-20 flex-shrink-0" />
-                <div className="flex-1 min-w-0 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Writing</span>
-                    <Button
-                      onClick={() => drift.triggerCheck()}
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs"
-                      disabled={drift.isChecking}
-                    >
-                      <Sparkles className="h-3 w-3 mr-1" />
-                      {drift.isChecking
-                        ? `Checking (${drift.checkingIds.size})...`
-                        : 'Check Alignment'}
-                    </Button>
-                  </div>
-                  {onBackToSetup && (
-                    <Button
-                      onClick={() => {
-                        if (confirm('Go back to outline setup? Writing editors will be hidden but your content is preserved.')) {
-                          onBackToSetup();
-                        }
-                      }}
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 text-xs text-muted-foreground"
-                    >
-                      <RotateCcw className="h-3 w-3 mr-1" />
-                      Back to Setup
-                    </Button>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+        {/* Toolbar */}
+        {blocks.length > 0 && (
+          <div className="flex-shrink-0 border-b">
+            {isSetupPhase ? (
+              /* Setup phase: Tab navigation */
+              (() => {
+                const assignedCount = blocks.filter(b => b.assignee).length;
+                const unconfirmedCount = dependencies?.filter(d => !d.confirmed).length || 0;
+                const relationshipCount = dependencies?.length || 0;
 
-        {blocks.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center text-center text-muted-foreground">
-            <div>
-              <p className="mb-4">No intent structure yet</p>
-              <p className="text-sm">Use &ldquo;Import Structure&rdquo; or &ldquo;+ Add&rdquo; above to begin</p>
-            </div>
+                return (
+                  <div>
+                    <SetupTabBar
+                      activeTab={activeSetupTab}
+                      onTabChange={setActiveSetupTab}
+                      rootBlocksCount={rootBlocks.length}
+                      assignedCount={assignedCount}
+                      relationshipCount={relationshipCount}
+                      unconfirmedCount={unconfirmedCount}
+                      onStartWriting={onStartWriting}
+                    />
+
+                    {activeSetupTab === 'outline' && (
+                      <OutlineInstructionBar
+                        rootBlocksCount={rootBlocks.length}
+                        onAddSection={handleAddBlock}
+                        onNextStep={() => setActiveSetupTab('assign')}
+                        ImportMarkdownDialog={importMarkdown ? ImportMarkdownDialog : undefined}
+                        onImportMarkdown={importMarkdown}
+                      />
+                    )}
+
+                    {activeSetupTab === 'assign' && (
+                      <AssignInstructionBar
+                        assignedCount={assignedCount}
+                        totalCount={rootBlocks.length}
+                        onNextStep={() => setActiveSetupTab('relationships')}
+                      />
+                    )}
+
+                    {activeSetupTab === 'relationships' && (
+                      <RelationshipsInstructionBar
+                        rootBlocksCount={rootBlocks.length}
+                        relationshipCount={relationshipCount}
+                        unconfirmedCount={unconfirmedCount}
+                        isDetecting={depLinks.isDetectingDeps}
+                        onDetectWithAI={depLinks.handleDetectDependencies}
+                      />
+                    )}
+                  </div>
+                );
+              })()
+            ) : null}
           </div>
-        ) : (
-          <SortableContext
-            items={rootBlocks.map(b => b.id)}
-            strategy={verticalListSortingStrategy}
-          >
-            <div ref={containerRef} className="flex-1 overflow-y-auto p-4 min-h-0 relative" onClick={() => depLinks.setSelectedDepId(null)}>
+        )}
+
+        {/* Main content area with optional side panel */}
+        <div className="flex-1 flex overflow-hidden">
+          {/* Left: Outline content */}
+          <div className={`flex-1 flex flex-col overflow-hidden transition-all ${
+            isSetupPhase && dependencies && dependencies.filter(d => !d.confirmed).length > 0 ? 'pr-0' : ''
+          }`}>
+            {blocks.length === 0 ? (
+              <StartOutlineGuide
+                onAddFirstSection={handleAddBlock}
+                onImportMarkdown={importMarkdown}
+                ImportMarkdownDialog={importMarkdown ? ImportMarkdownDialog : undefined}
+              />
+            ) : (
+              <SortableContext
+                items={rootBlocks.map(b => b.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div ref={containerRef} className="flex-1 overflow-y-auto p-4 min-h-0 relative bg-background" onClick={() => depLinks.setSelectedDepId(null)}>
               {/* SVG dependency lines overlay — uses content-relative coords so it scrolls with content */}
               {depLinks.depLines.length > 0 && (
                 <svg
@@ -523,11 +455,15 @@ export default function IntentPanel({
                     return (
                       <>
                         {explicit.map((line, idx) => {
-                          // Orthogonal polyline: right → vertical → left
-                          const gap = 20 + idx * 16; // stagger vertical segments
-                          const midX = Math.max(line.x1, line.x2) + gap;
-                          const midY = (line.y1 + line.y2) / 2;
-                          const path = `M ${line.x1} ${line.y1} H ${midX} V ${line.y2} H ${line.x2}`;
+                          // Use bezier curve for smoother appearance
+                          // In writing phase, use much smaller gap to stay within outline area
+                          const baseGap = isSetupPhase ? (25 + idx * 18) : (15 + idx * 10);
+                          const maxGap = isSetupPhase ? 120 : 50; // Tighter in writing phase
+                          const gap = Math.min(baseGap, maxGap);
+                          const controlX = Math.max(line.x1, line.x2) + gap;
+
+                          // Bezier curve path: start → control point → end
+                          const path = `M ${line.x1} ${line.y1} C ${controlX} ${line.y1}, ${controlX} ${line.y2}, ${line.x2} ${line.y2}`;
                           const isBidi = line.dep.direction === 'bidirectional';
 
                           // Check for conflict on this dependency
@@ -537,19 +473,21 @@ export default function IntentPanel({
                           // Use red for conflicts, otherwise original color
                           const c = hasConflict ? '#ef4444' : line.color;
 
-                          // Subtle by default, vivid on hover/click
-                          const active = sel || hov;
+                          // Subtle by default, vivid on hover
+                          // In writing phase, make lines more subtle
                           const isHighlighted = line.id === sel || line.id === hov;
-                          const lineOpacity = active
-                            ? (isHighlighted ? 1.0 : 0.08)
-                            : (line.dashed ? 0.18 : 0.25);
-                          const lineWidth = 2;
+                          const lineOpacity = isSetupPhase
+                            ? (isHighlighted ? 0.9 : 0.4)
+                            : (isHighlighted ? 0.7 : 0.25);
+                          const lineWidth = isHighlighted ? 2 : 1.5;
 
-                          // Arrowhead at "to" end — left-pointing ◀
-                          const a = 10; // arrow size
+                          // Small arrowhead at "to" end
+                          const a = 8;
                           const toArrow = `${line.x2 + a},${line.y2 - a / 2} ${line.x2},${line.y2} ${line.x2 + a},${line.y2 + a / 2}`;
-                          // Arrowhead at "from" end — left-pointing ◀ (bidirectional)
-                          const fromArrow = `${line.x1 + a},${line.y1 - a / 2} ${line.x1},${line.y1} ${line.x1 + a},${line.y1 + a / 2}`;
+
+                          // Label position - in writing phase, position closer to curve
+                          const labelX = controlX + 8;
+                          const labelY = (line.y1 + line.y2) / 2;
 
                           return (
                             <g key={line.id}>
@@ -558,30 +496,17 @@ export default function IntentPanel({
                                 d={path}
                                 fill="none"
                                 stroke="transparent"
-                                strokeWidth={14}
+                                strokeWidth={16}
                                 style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
                                 onMouseEnter={() => depLinks.setHoveredDepId(line.id)}
                                 onMouseLeave={() => depLinks.setHoveredDepId(null)}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  // Select-first, action-second
-                                  if (sel === line.id) {
-                                    // 2nd click on same line → perform action
-                                    if (line.dashed && updateDependency) {
-                                      updateDependency(line.dep.id, { confirmed: true, source: 'ai-confirmed' });
-                                    } else if (deleteDependency) {
-                                      if (confirm('Remove this dependency?')) {
-                                        deleteDependency(line.dep.id);
-                                      }
-                                    }
-                                    depLinks.setSelectedDepId(null);
-                                  } else {
-                                    // 1st click → select
-                                    depLinks.setSelectedDepId(line.id);
-                                  }
+                                  // Toggle selection (delete via dedicated button)
+                                  depLinks.setSelectedDepId(sel === line.id ? null : line.id);
                                 }}
                               />
-                              {/* Visible polyline */}
+                              {/* Visible curve */}
                               <path
                                 d={path}
                                 fill="none"
@@ -589,38 +514,87 @@ export default function IntentPanel({
                                 strokeWidth={lineWidth}
                                 strokeDasharray={line.dashed ? '6 4' : undefined}
                                 opacity={lineOpacity}
-                                strokeLinejoin="round"
                               />
                               {/* Arrowhead at "to" end */}
                               <polygon points={toArrow} fill={c} opacity={lineOpacity} />
-                              {/* Arrowhead at "from" end (bidirectional only) */}
-                              {isBidi && <polygon points={fromArrow} fill={c} opacity={lineOpacity} />}
-                              {/* Dot at "from" end (directed only) */}
-                              {!isBidi && <circle cx={line.x1} cy={line.y1} r={4} fill={c} opacity={lineOpacity} />}
-                              {/* Label on the vertical segment */}
-                              <text
-                                x={midX + 4}
-                                y={midY}
-                                fontSize={10}
-                                fill={c}
-                                fontWeight={hasConflict ? '600' : '500'}
-                                textAnchor="start"
-                                dominantBaseline="middle"
-                                opacity={lineOpacity * 0.9}
+                              {/* Small dot at "from" end */}
+                              <circle cx={line.x1} cy={line.y1} r={3} fill={c} opacity={lineOpacity} />
+                              {/* Label with hover actions - in writing phase, only show on hover */}
+                              {(isSetupPhase || isHighlighted) && (
+                              <foreignObject
+                                x={labelX - 6}
+                                y={labelY - 14}
+                                width={200}
+                                height={28}
+                                style={{ overflow: 'visible', pointerEvents: 'auto' }}
+                                onMouseEnter={() => depLinks.setHoveredDepId(line.id)}
+                                onMouseLeave={() => depLinks.setHoveredDepId(null)}
                               >
-                                {hasConflict ? '⚠ ' : ''}{line.dep.label}
-                                {line.dashed ? ' ✓?' : ''}
-                              </text>
+                                <div
+                                  className={`inline-flex items-center h-7 rounded-full border shadow-sm transition-all ${
+                                    isHighlighted
+                                      ? 'bg-background border-primary'
+                                      : 'bg-background/90 border-border'
+                                  }`}
+                                  style={{ opacity: isHighlighted ? 1 : 0.8 }}
+                                >
+                                  {/* Label */}
+                                  <span className={`px-3 text-sm font-medium ${
+                                    hasConflict ? 'text-destructive' : 'text-primary'
+                                  }`}>
+                                    {hasConflict ? '⚠ ' : ''}{line.dep.label}
+                                  </span>
+
+                                  {/* Action buttons - visible on hover in setup phase */}
+                                  {isHighlighted && isSetupPhase && (
+                                    <div className="flex items-center border-l border-border">
+                                      {/* Edit button */}
+                                      {updateDependency && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            depLinks.setSelectedDepId(null);
+                                            const rect = (e.target as HTMLElement).getBoundingClientRect();
+                                            depLinks.openEditPopup(line.dep, rect.left, rect.bottom + 4);
+                                          }}
+                                          className="w-7 h-7 flex items-center justify-center text-primary hover:bg-primary hover:text-white transition-colors"
+                                          title="Edit"
+                                        >
+                                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                          </svg>
+                                        </button>
+                                      )}
+                                      {/* Delete button */}
+                                      {deleteDependency && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            deleteDependency(line.dep.id);
+                                          }}
+                                          className="w-7 h-7 flex items-center justify-center rounded-r-full text-muted-foreground hover:bg-destructive hover:text-white transition-colors"
+                                          title="Delete"
+                                        >
+                                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                          </svg>
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </foreignObject>
+                              )}
                               {/* Conflict tooltip on hover */}
                               {hasConflict && isHighlighted && (
                                 <foreignObject
-                                  x={midX + 4}
-                                  y={midY + 12}
-                                  width={200}
-                                  height={60}
+                                  x={labelX}
+                                  y={labelY + 10}
+                                  width={180}
+                                  height={50}
                                   style={{ overflow: 'visible' }}
                                 >
-                                  <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded p-1.5 text-[10px] text-red-700 dark:text-red-300 shadow-sm">
+                                  <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded px-2 py-1 text-xs text-red-700 dark:text-red-300 shadow-sm">
                                     {conflict.issue}
                                   </div>
                                 </foreignObject>
@@ -634,6 +608,41 @@ export default function IntentPanel({
                 </svg>
               )}
 
+              {/* Drag preview line - shown while dragging to create a connection */}
+              {depLinks.dragPreviewLine && (
+                <svg
+                  className="absolute top-0 left-0 w-full pointer-events-none z-20"
+                  style={{ height: containerRef.current?.scrollHeight || '100%', overflow: 'visible' }}
+                >
+                  <line
+                    x1={depLinks.dragPreviewLine.x1}
+                    y1={depLinks.dragPreviewLine.y1}
+                    x2={depLinks.dragPreviewLine.x2}
+                    y2={depLinks.dragPreviewLine.y2}
+                    stroke="hsl(var(--primary))"
+                    strokeWidth={3}
+                    strokeDasharray="8,4"
+                    strokeLinecap="round"
+                    opacity={0.7}
+                  />
+                  {/* Circle at cursor end */}
+                  <circle
+                    cx={depLinks.dragPreviewLine.x2}
+                    cy={depLinks.dragPreviewLine.y2}
+                    r={6}
+                    fill="hsl(var(--primary))"
+                    opacity={0.7}
+                  />
+                  {/* Circle at source end */}
+                  <circle
+                    cx={depLinks.dragPreviewLine.x1}
+                    cy={depLinks.dragPreviewLine.y1}
+                    r={4}
+                    fill="hsl(var(--primary))"
+                  />
+                </svg>
+              )}
+
               {mergedRenderList.map((item, idx) => (
                 <SortableBlockItem key={item.data.id} id={item.data.id}>
                   <IntentBlockCard
@@ -644,43 +653,57 @@ export default function IntentPanel({
                   />
                 </SortableBlockItem>
               ))}
+
+              {/* Add Section button at the bottom */}
+              {isSetupPhase && (
+                <button
+                  onClick={handleAddBlock}
+                  className="mt-4 flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors pl-1"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span>Add Section</span>
+                </button>
+              )}
             </div>
           </SortableContext>
         )}
-
-        {/* Footer: Agree & Start Writing button — setup phase only */}
-        {isSetupPhase && onStartWriting && blocks.length > 0 && (
-          <div className="flex-shrink-0 border-t bg-muted/30 px-4 py-3">
-            <Button
-              onClick={() => {
-                if (confirm('Start writing phase? This will create a baseline snapshot of your intent structure. You can still edit intents during writing.')) {
-                  onStartWriting();
-                }
-              }}
-              className="w-full"
-              size="lg"
-            >
-              <CheckCircle2 className="h-4 w-4 mr-2" />
-              Agree &amp; Start Writing
-            </Button>
-            {dependencies && dependencies.filter(d => !d.confirmed).length > 0 && (
-              <p className="text-xs text-amber-600 dark:text-amber-400 text-center mt-1">
-                {dependencies.filter(d => !d.confirmed).length} unconfirmed dependency suggestion(s) — click dashed lines to confirm
-              </p>
-            )}
           </div>
-        )}
+
+          {/* Right: Relationship side panel - only show when there are AI-suggested unconfirmed deps */}
+          {isSetupPhase && dependencies && dependencies.some(d => d.source === 'ai-suggested' && !d.confirmed) && (
+            <RelationshipSidePanel
+              dependencies={dependencies}
+              blocks={blocks}
+              hoveredDepId={depLinks.hoveredDepId}
+              selectedDepId={depLinks.selectedDepId}
+              onHoverDep={depLinks.setHoveredDepId}
+              onConfirm={(id) => updateDependency?.(id, { confirmed: true, source: 'ai-confirmed' })}
+              onDelete={(id) => deleteDependency?.(id)}
+            />
+          )}
+        </div>
+
       </div>
 
-      {/* Dependency creator popup */}
-      {depLinks.depCreator && (
-        <DepCreatorPopup
-          x={depLinks.depCreator.x}
-          y={depLinks.depCreator.y}
-          onCreate={depLinks.handleCreateDependency}
-          onCancel={() => depLinks.handleCreateDependency('related', 'directed')}
-        />
-      )}
+      {/* Relationship creator popup */}
+      {depLinks.depCreator && (() => {
+        // Find the dependency being edited (if any)
+        const editingDep = depLinks.depCreator.depId
+          ? dependencies?.find(d => d.id === depLinks.depCreator!.depId)
+          : undefined;
+
+        return (
+          <RelationshipCreatorPopup
+            x={depLinks.depCreator.x}
+            y={depLinks.depCreator.y}
+            onCreate={depLinks.handleCreateDependency}
+            onCancel={depLinks.handleCancelDependency}
+            currentType={editingDep?.relationshipType}
+            currentLabel={editingDep?.label}
+            isEditing={depLinks.depCreator.isEditing}
+          />
+        );
+      })()}
 
       {/* Drag Overlay */}
       <DragOverlay>
