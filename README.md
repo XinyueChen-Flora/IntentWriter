@@ -1,6 +1,6 @@
 # IntentWriter
 
-A real-time collaborative writing platform with AI-powered intent alignment analysis. IntentWriter helps teams maintain alignment between written content and stated intentions through a dual-panel interface, hierarchical intent structures, and intelligent coverage tracking.
+A real-time collaborative writing platform with AI-powered intent alignment analysis. IntentWriter helps teams maintain alignment between written content and stated intentions through a dual-panel interface, hierarchical intent structures, and intelligent drift detection.
 
 ## Core Concept
 
@@ -10,105 +10,114 @@ IntentWriter addresses the challenge of **intent-driven collaborative writing**:
 - Difficult to track which intentions are covered, partially addressed, or missing
 
 The solution provides:
-- **Dual-panel interface**: Writing blocks (left) linked to intent blocks (right)
-- **AI-powered alignment analysis**: Real-time feedback on coverage status
-- **Hierarchical intent management**: Nested intent structures with parent-child relationships
-- **Shared writing rules**: Collaborative rubric management
-- **Real-time collaboration**: Conflict-free synchronization across users
+- **Two-phase workflow**: Setup (outline, assign, relate) → Writing (draft with AI feedback)
+- **Dual-panel interface**: Writing editor (left) linked to intent outline (right)
+- **AI-powered drift detection**: Real-time coverage analysis with sentence-level mapping
+- **Cross-section dependency tracking**: Bidirectional relationships with conflict detection
+- **Real-time collaboration**: Conflict-free synchronization via Yjs CRDT
 
 ## Features
 
-### Dual-Panel Editor Interface
+### Two-Phase Workflow
 
-**Left Panel - Writing Editor**
-- BlockNote-based rich text editor for each writing block
-- Multiple independent writing blocks that can be created/edited/deleted
-- Real-time collaboration via Yjs CRDT
-- Visual highlighting showing alignment status with intent blocks
-- Each writing block can be linked to a specific intent block
+**Phase 1 — Setup**
 
-**Right Panel - Intent Panel**
-- Hierarchical intent structure with unlimited nesting levels
-- Indent/outdent operations to manage hierarchy
-- Drag-and-drop reordering
-- Collapse/expand tree nodes
-- Visual coverage indicators:
-  - `covered` - fully addressed in writing
-  - `partial` - some aspects addressed
-  - `misaligned` - addressed but incorrectly
-  - `missing-skipped` - skipped when later intents have content
-  - `missing-not-started` - not yet addressed
-  - `extra` - AI-suggested intent for content not in outline
+A three-tab interface for preparing the writing structure before drafting begins:
 
-### AI-Powered Alignment Analysis
+1. **Outline Tab**: Create and organize a hierarchical intent structure
+   - Add/edit/delete intent blocks with unlimited nesting
+   - Indent/outdent (Tab/Shift+Tab) to manage hierarchy
+   - Drag-and-drop reordering via dnd-kit
+   - Collapse/expand tree nodes
+   - Import from Markdown or unstructured text (AI-powered parsing)
 
-- **GPT-4o Integration** - Analyzes writing against intent structure
-- **Detailed Output**:
-  - Overall alignment score (0-100)
-  - Per-intent coverage status
-  - Writing segments mapped to specific intents
-  - Identified covered/missing/extra aspects
-  - Suggestions for improvement
-  - Order mismatch detection
-- **Suggested Intents** - AI proposes new intents for content not in the outline
-- **Real-time Feedback** - Analysis updates as writing changes
+2. **Assign Tab**: Assign sections to team members
+   - Dropdown selector with collaborator list
+   - Progress indicator showing assignment completion
 
-### Hierarchical Intent Management
+3. **Relationships Tab**: Define dependencies between sections
+   - AI-suggested dependencies via `/api/detect-dependencies`
+   - Manual relationship creation with drag-to-connect UI
+   - Relationship types: `depends-on`, `must-be-consistent`, `builds-upon`, `contrasts-with`, `supports`
+   - Visual SVG lines with color-coded labels and conflict indicators
+   - Side panel listing all relationships with confirm/edit/delete actions
 
-- Unlimited nesting with parent-child relationships
-- Position tracking (level 0=root, 1=child, 2=grandchild, etc.)
-- Intent tags for metadata/classifications
-- Assignment system for team member responsibility
-- Collapsible tree navigation
+Clicking **"Start Writing"** creates a baseline snapshot and transitions to Phase 2.
 
-### Shared Writing Rules/Rubrics
+**Phase 2 — Writing**
 
-- Create writing rules with description, rationale, and examples
-- Track editing history with version tracing
-- AAC&U Framework integration for academic writing rubrics:
-  - Context & Purpose
-  - Content Development
-  - Genre Conventions
-  - Sources & Evidence
-  - Syntax & Mechanics
-- Rubric upload and parsing
+Each root-level intent section gets its own TipTap collaborative editor:
+
+- Rich text editing with bold, italic, lists, headings, blockquotes, code blocks
+- Real-time collaboration via Yjs CRDT through PartyKit
+- AI-powered drift detection per section
+- In-editor visual feedback (sentence highlighting, inline widgets)
+
+### AI-Powered Drift Detection
+
+Triggered per section via the "Check Alignment" button:
+
+- **Coverage analysis**: Each intent is classified as `covered`, `partial`, or `missing`
+- **Sentence mapping**: Writing sentences are anchored to specific intents (with start/end text markers)
+- **Dependency conflict detection**: Identifies contradictions between related sections
+- **Cross-section impact assessment**: Shows how changes in one section affect dependent sections
+- **Gap suggestions**: AI generates suggested content for missing/partial intents, with simulated insertion position
+
+**In-Editor Visual Feedback** (via TipTap highlight plugin):
+- Green highlight = sentence supports an intent (covered)
+- Orange highlight = partial coverage
+- Yellow highlight = orphan sentence (not mapped to any intent)
+- Red highlight = dependency conflict
+- Inline widgets: missing intent indicators, AI-suggested content badges, simulated writing previews
+
+### Intent Outline Management
+
+- Hierarchical structure with `parentId`, `level`, `position` tracking
+- Change tracking: `added`, `proposed`, `modified`, `removed` statuses
+- Proposal system: intents can be `pending` / `approved` / `rejected`
+- Coverage icons in outline view reflecting drift detection results
+- AI badge for intents with suggested content
+
+### Diff & Impact Preview
+
+- **Inline diff view**: Side-by-side comparison of current vs. simulated outline changes
+- **Section impact cards**: Shows how proposed changes affect other sections
+- **Impact levels**: `none`, `minor`, `significant`
 
 ### Real-time Collaboration
 
-- Online user tracking with presence indicators
-- Conflict-free synchronization via Yjs CRDT
 - WebSocket communication through PartyKit
-- User identification with names and avatars
-- Automatic backup to dual storage (PartyKit + Supabase)
+- Yjs CRDT for conflict-free text synchronization
+- Online user tracking with presence indicators and avatars
+- User identification with names and colors
+- Automatic backup to Supabase (triggered after inactivity)
 
-### Document Management
+### Document & Team Management
 
 - Create, view, and delete documents from dashboard
-- Share document links with collaborators
-- Track document ownership and collaboration access
-- Sort by last updated
+- Invite collaborators by email (via Resend)
+- Accept invitations via token-based invite links (`/invite/[token]`)
+- Manage collaborators in share dialog (add/remove)
+- Track document ownership and access control
 
-### Data Import/Export
+### Data Import
 
 - Markdown import to convert outline format into intent hierarchy
-- Supports:
-  - Markdown headings (# to ######)
-  - Numbered lists (1. Item)
-  - Bullet lists (* or - Item)
-  - Indentation for hierarchy
-  - Intent tags ([intent]: metadata)
+- AI-powered parsing of unstructured text into structured outline via `/api/parse-outline`
+- Supports: Markdown headings, numbered/bullet lists, indentation
 
 ## Tech Stack
 
 | Category | Technologies |
 |----------|-------------|
 | **Frontend** | Next.js 15, React 19, TypeScript, Tailwind CSS |
-| **Rich Text Editor** | BlockNote 0.41.1 with collaborative editing |
+| **Rich Text Editor** | TipTap 3.20 with y-prosemirror for collaborative editing |
 | **Real-time Sync** | PartyKit 0.0.115 (WebSocket) + Yjs 13.6.27 (CRDT) |
 | **UI Components** | Radix UI primitives, Lucide Icons |
 | **Drag & Drop** | dnd-kit |
-| **Authentication & Database** | Supabase (PostgreSQL, Auth, Storage) |
+| **Auth & Database** | Supabase (PostgreSQL + Auth) |
 | **AI Analysis** | OpenAI GPT-4o |
+| **Email** | Resend |
 | **Markdown** | react-markdown, remark-gfm |
 
 ## Project Structure
@@ -116,59 +125,96 @@ The solution provides:
 ```
 IntentWriter/
 ├── app/
-│   ├── page.tsx                 # Home page (login/register landing)
-│   ├── layout.tsx               # Root layout
-│   ├── globals.css              # Global styles
+│   ├── page.tsx                    # Landing page (login/register)
+│   ├── layout.tsx                  # Root layout
+│   ├── globals.css                 # Global styles
 │   ├── auth/
-│   │   ├── login/page.tsx       # Login page
-│   │   ├── register/page.tsx    # Registration page
-│   │   └── callback/route.ts    # OAuth callback handler
+│   │   ├── login/page.tsx          # Login page
+│   │   ├── register/page.tsx       # Registration page
+│   │   └── callback/route.ts      # OAuth callback handler
 │   ├── dashboard/
-│   │   ├── page.tsx             # Dashboard (server component)
-│   │   └── DashboardClient.tsx  # Dashboard UI (client component)
+│   │   └── page.tsx                # Dashboard (document list)
+│   ├── invite/[token]/
+│   │   └── page.tsx                # Invitation acceptance page
 │   ├── room/[id]/
-│   │   ├── page.tsx             # Room page with auth check
-│   │   └── Room.tsx             # Room wrapper with Suspense
+│   │   └── page.tsx                # Collaborative room
 │   └── api/
-│       ├── check-alignment/route.ts     # AI alignment analysis
-│       ├── backup-document/route.ts     # Backup to Supabase
-│       ├── restore-document/route.ts    # Restore from backup
-│       └── analyze-rubric/route.ts      # Rubric parsing
+│       ├── check-drift/            # AI drift detection & coverage analysis
+│       ├── detect-dependencies/    # AI-suggested section relationships
+│       ├── assess-impact/          # Cross-section impact evaluation
+│       ├── generate-gap-suggestion/# AI content suggestions for gaps
+│       ├── analyze-removal-impact/ # Impact analysis for intent removal
+│       ├── parse-outline/          # AI text → structured outline
+│       ├── create-baseline/        # Snapshot intents at phase transition
+│       ├── backup-document/        # Save state to Supabase
+│       ├── restore-document/       # Restore from backup
+│       ├── document-members/       # List collaborators
+│       ├── invite/                 # Send invitation email
+│       │   └── accept/             # Accept invitation
+│       ├── remove-collaborator/    # Remove collaborator access
+│       └── delete-document/        # Delete document
 ├── components/
-│   ├── editor/
-│   │   ├── CollaborativeEditor.tsx      # Main orchestrator (~900 lines)
-│   │   ├── WritingEditor.tsx            # BlockNote editors & alignment UI (~1400 lines)
-│   │   └── ImportMarkdownDialog.tsx     # Markdown import dialog
-│   ├── intent/
-│   │   ├── IntentPanel.tsx              # Intent hierarchy display (~1200 lines)
-│   │   ├── SharedRulesPanel.tsx         # Shared writing rules management
+│   ├── room/
+│   │   └── RoomShell.tsx           # Main layout (header, phase indicator, panels)
 │   │   └── hooks/
-│   │       ├── useIntentHierarchy.ts    # Tree structure & navigation
-│   │       ├── useIntentDragDrop.ts     # Drag-and-drop logic
-│   │       ├── useIntentCoverage.ts     # Coverage status management
-│   │       └── useIntentSuggestions.ts  # AI suggestion handling
+│   │       ├── useBackup.ts        # Auto-backup after inactivity
+│   │       └── useDocumentMembers.ts
+│   ├── intent/
+│   │   ├── IntentPanel.tsx         # Intent panel orchestrator
+│   │   ├── IntentPanelContext.tsx   # Shared state context
+│   │   ├── IntentBlockCard.tsx     # Single intent block renderer
+│   │   ├── ImportMarkdownDialog.tsx
+│   │   ├── blocks/
+│   │   │   ├── RootIntentBlock.tsx  # Section with writing editor
+│   │   │   └── ChildIntentBlock.tsx # Subsection display
+│   │   ├── hooks/
+│   │   │   ├── useIntentHierarchy.ts
+│   │   │   ├── useIntentDragDrop.ts
+│   │   │   ├── useIntentBlockOperations.ts
+│   │   │   ├── useDriftDetection.ts
+│   │   │   ├── useImpactAssessment.ts
+│   │   │   └── useDependencyLinks.ts
+│   │   ├── diff/                   # Diff views & impact cards
+│   │   ├── alignment/              # Alignment summary & icons
+│   │   ├── relationship/           # Dependency creator & side panel
+│   │   ├── onboarding/             # Setup guides
+│   │   ├── setup/                  # Setup tab bars & instructions
+│   │   └── ui/                     # Intent-specific UI components
+│   ├── writing/
+│   │   ├── TipTapEditor.tsx        # Collaborative TipTap editor
+│   │   ├── plugins/
+│   │   │   └── highlightPlugin.ts  # Sentence highlighting & decorations
+│   │   ├── widgets/                # Inline editor widgets
+│   │   └── utils/                  # Text range finder, exporters
+│   ├── share/
+│   │   └── ShareDialog.tsx         # Collaborator management dialog
 │   ├── user/
-│   │   └── UserAvatar.tsx               # User profile avatar
+│   │   └── UserAvatar.tsx          # User avatar with fallback
 │   ├── common/
-│   │   └── LinkifyWarningSuppress.tsx   # Warning suppression utility
-│   └── ui/                              # Radix UI components
-│       ├── button.tsx, input.tsx, card.tsx, dialog.tsx, etc.
+│   │   └── Logo.tsx
+│   └── ui/                         # Radix UI primitives
 ├── lib/
-│   ├── partykit.ts                      # PartyKit client hook (useRoom)
-│   ├── aacuFramework.ts                 # AAC&U Writing rubrics framework
-│   ├── markdownParser.ts                # Markdown to intent hierarchy parser
-│   ├── utils.ts                         # Utility functions
+│   ├── partykit.ts                 # useRoom hook & RoomState types
+│   ├── types.ts                    # Core data models
+│   ├── relationship-types.ts       # Dependency type definitions
+│   ├── markdownParser.ts           # Markdown → intent hierarchy parser
+│   ├── importIntents.ts            # Intent import utilities
+│   ├── getUserColor.ts             # User color assignment
+│   ├── email.ts                    # Resend email client
+│   ├── utils.ts                    # General utilities
+│   ├── api/
+│   │   └── middleware.ts           # withErrorHandler, requireAuth, etc.
 │   └── supabase/
-│       ├── client.ts                    # Client-side Supabase instance
-│       ├── server.ts                    # Server-side Supabase instance
-│       └── middleware.ts                # Auth middleware
+│       ├── client.ts               # Browser Supabase client
+│       ├── server.ts               # Server Supabase client + admin
+│       └── middleware.ts           # Auth session middleware
 ├── party/
-│   └── server.ts                        # PartyKit WebSocket server
+│   └── server.ts                   # PartyKit WebSocket server
 ├── supabase/
-│   └── schema.sql                       # Database schema
-├── middleware.ts                        # Next.js auth middleware
-├── partykit.json                        # PartyKit configuration
-└── package.json                         # Dependencies
+│   └── schema.sql                  # Database schema
+├── middleware.ts                   # Next.js auth middleware
+├── partykit.json                   # PartyKit configuration
+└── package.json
 ```
 
 ## Prerequisites
@@ -176,7 +222,8 @@ IntentWriter/
 - Node.js 18+ and npm
 - Supabase account (free tier available)
 - PartyKit account (free tier available)
-- OpenAI API key (for alignment analysis)
+- OpenAI API key (for AI analysis)
+- Resend API key (for email invitations, optional)
 
 ## Setup Instructions
 
@@ -196,6 +243,7 @@ npm install
 5. Go to **Settings** → **API** and copy:
    - Project URL
    - `anon` public key
+   - `service_role` secret key
 
 ### 3. Configure Environment Variables
 
@@ -208,9 +256,13 @@ NEXT_PUBLIC_PARTYKIT_HOST=localhost:1999
 # Supabase
 NEXT_PUBLIC_SUPABASE_URL=https://xxxxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=xxxxx
+SUPABASE_SERVICE_ROLE_KEY=xxxxx
 
-# OpenAI (for alignment analysis)
+# OpenAI (for AI analysis)
 OPENAI_API_KEY=sk-xxxxx
+
+# Resend (for email invitations, optional)
+RESEND_API_KEY=re_xxxxx
 ```
 
 ### 4. Run the Development Server
@@ -233,61 +285,24 @@ npm run partykit
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-## Usage Guide
-
-### Creating an Account
-
-1. Navigate to the home page
-2. Click "Register"
-3. Fill in your name, email, and password
-4. After registration, log in with your credentials
-
-### Creating a Document
-
-1. After logging in, you'll see the dashboard
-2. Enter a document title in the "Create New Document" form
-3. Click "Create"
-4. You'll be redirected to the collaborative editor
-
-### Using the Editor
-
-**Writing Blocks (Left Panel)**
-- Click "+ Add Writing Block" to create a new writing space
-- Use the rich text editor to format your content
-- Click "Link" to connect the writing block to an intent block
-- Visual indicators show alignment status with linked intents
-
-**Intent Blocks (Right Panel)**
-- Click "+ Add Intent" to create a new intent
-- Use Tab/Shift+Tab or indent buttons to create hierarchy
-- Drag and drop to reorder intents
-- Click the expand/collapse icons to navigate the tree
-- Coverage status shows alignment with writing content
-
-**AI Alignment Analysis**
-- Click "Check Alignment" to trigger AI analysis
-- View overall score and per-intent coverage status
-- Review AI suggestions for additional intents
-- Accept or reject suggested intents
-
-**Shared Rules**
-- Open the Rules panel to view/add writing rules
-- Each rule includes description, rationale, and examples
-- Rules are shared across all collaborators
-
-**Collaboration**
-- Share the room URL with collaborators
-- All changes sync in real-time
-- Online users are displayed in the header
-
 ## API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/check-alignment` | POST | AI-powered alignment analysis |
-| `/api/backup-document` | POST | Save state to Supabase |
-| `/api/restore-document` | POST | Restore from backup |
-| `/api/analyze-rubric` | POST | Parse rubric text into rules |
+| `/api/check-drift` | POST | AI-powered drift detection & coverage analysis |
+| `/api/detect-dependencies` | POST | AI-suggested section relationships |
+| `/api/assess-impact` | POST | Cross-section impact evaluation |
+| `/api/generate-gap-suggestion` | POST | AI content suggestions for missing intents |
+| `/api/analyze-removal-impact` | POST | Impact analysis for intent removal |
+| `/api/parse-outline` | POST | AI text → structured outline |
+| `/api/create-baseline` | POST | Save intent structure at phase transition |
+| `/api/backup-document` | POST | Backup full state to Supabase |
+| `/api/restore-document` | POST | Restore from latest backup |
+| `/api/document-members` | GET | List document collaborators |
+| `/api/invite` | POST | Send invitation email |
+| `/api/invite/accept` | POST | Accept invitation token |
+| `/api/remove-collaborator` | DELETE | Remove collaborator access |
+| `/api/delete-document` | DELETE | Delete document |
 
 ## Deployment
 
@@ -308,7 +323,9 @@ You'll get a URL like: `https://intent-writer.your-username.partykit.dev`
    NEXT_PUBLIC_PARTYKIT_HOST=intent-writer.your-username.partykit.dev
    NEXT_PUBLIC_SUPABASE_URL=https://xxxxx.supabase.co
    NEXT_PUBLIC_SUPABASE_ANON_KEY=xxxxx
+   SUPABASE_SERVICE_ROLE_KEY=xxxxx
    OPENAI_API_KEY=sk-xxxxx
+   RESEND_API_KEY=re_xxxxx
    ```
 4. Deploy
 
@@ -334,7 +351,7 @@ Make sure you've run the SQL schema in your Supabase dashboard.
 ### Authentication not working
 Check that your Supabase URL and anon key are correct.
 
-### AI alignment not working
+### AI analysis not working
 Verify your OpenAI API key is set in `.env.local` or Vercel environment variables.
 
 ## License

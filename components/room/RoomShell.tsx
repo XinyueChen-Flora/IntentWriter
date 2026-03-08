@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useRoom } from "@/lib/partykit";
 import type { User } from "@supabase/supabase-js";
-import IntentPanel from "../intent/IntentPanel";
+import IntentPanel from "../outline/IntentPanel";
 import { useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Share2, ChevronLeft, LogOut } from "lucide-react";
@@ -13,7 +13,7 @@ import { LogoIcon } from "@/components/common/Logo";
 import { getUserColor } from "@/lib/getUserColor";
 import { useDocumentMembers } from "./hooks/useDocumentMembers";
 import { useBackup } from "./hooks/useBackup";
-import { useIntentBlockOperations } from "../intent/hooks/useIntentBlockOperations";
+import { useIntentBlockOperations } from "@/hooks/useIntentBlockOperations";
 
 type RoomShellProps = {
   roomId: string;

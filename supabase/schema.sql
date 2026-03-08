@@ -114,6 +114,25 @@ create or replace trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
 
+-- Function to sync profile when user metadata changes (e.g. OAuth re-login updates avatar)
+create or replace function public.handle_user_updated()
+returns trigger as $$
+begin
+  update public.profiles
+  set
+    avatar_url = new.raw_user_meta_data->>'avatar_url',
+    full_name = coalesce(new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'name', old.raw_user_meta_data->>'full_name'),
+    updated_at = now()
+  where id = new.id;
+  return new;
+end;
+$$ language plpgsql security definer;
+
+-- Trigger to keep profiles in sync on every auth.users update (login, metadata refresh, etc.)
+create or replace trigger on_auth_user_updated
+  after update on auth.users
+  for each row execute procedure public.handle_user_updated();
+
 -- Function to update updated_at timestamp
 create or replace function public.handle_updated_at()
 returns trigger as $$
