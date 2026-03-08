@@ -124,7 +124,11 @@ export function RootIntentBlock({ block, rootIndex }: RootIntentBlockProps) {
   };
 
   return (
-    <div className="mb-4 group relative">
+    <div className={`mb-4 group relative rounded-xl transition-all ${
+      ctx.activeDiffSession?.sourceSectionId === block.id
+        ? 'bg-primary/[0.03] ring-1 ring-primary/15 p-2 -m-2'
+        : ''
+    }`}>
       {dropIndicator}
       <div className="flex flex-row items-stretch">
         {/* Left Panel: Intent card + children */}

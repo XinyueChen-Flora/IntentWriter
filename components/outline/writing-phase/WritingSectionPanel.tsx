@@ -380,28 +380,8 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
           </button>
         )}
 
-        {/* Prose mode preview — replaces editor with split left/right view */}
-        {(() => {
-          const wp = ctx.activeDiffSession?.writingPreviews?.get(block.id);
-          const isProseActive = wp?.mode === 'prose' && !wp.isLoading && (wp.currentPreview || wp.changedPreview);
-          if (!isProseActive) return null;
-          return (
-            <div className="flex-1 overflow-y-auto">
-              <SideBySideDiff
-                oldText={wp!.currentPreview}
-                newText={wp!.changedPreview}
-                className="text-sm leading-relaxed text-foreground/90"
-                padded
-              />
-            </div>
-          );
-        })()}
-
-        {/* Normal editor — hidden when prose preview is active */}
-        {!(() => {
-          const wp = ctx.activeDiffSession?.writingPreviews?.get(block.id);
-          return wp?.mode === 'prose' && !wp.isLoading && (wp.currentPreview || wp.changedPreview);
-        })() && matchedWritingBlock ? (
+        {/* Normal editor */}
+        {matchedWritingBlock ? (
           <TipTapEditor
             intent={block}
             writingBlock={matchedWritingBlock}
@@ -521,11 +501,147 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
           </div>
         )}
       </div>
+
+      {/* Prose mode: AI simulation panel beside the editor */}
+      {(() => {
+        const session = ctx.activeDiffSession;
+        if (!session) return null;
+        const wp = session.writingPreviews?.get(block.id);
+        if (wp?.mode !== 'prose' || wp.isLoading || (!wp.currentPreview && !wp.changedPreview)) return null;
+        const isSource = session.sourceSectionId === block.id;
+        return (
+          <ProseSimulationPanel
+            currentText={wp.currentPreview}
+            simulatedText={wp.changedPreview}
+            isSource={isSource}
+          />
+        );
+      })()}
     </div>
   );
 }
 
-// Writing preview — side-by-side with highlighted differences
+// Prose mode: side panel showing AI-simulated writing changes
+function ProseSimulationPanel({
+  currentText,
+  simulatedText,
+  isSource,
+}: {
+  currentText: string;
+  simulatedText: string;
+  isSource: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const label = isSource ? 'Simulated Writing Change' : 'Simulated Writing Impact';
+
+  return (
+    <div className={`border rounded-lg overflow-hidden flex flex-col transition-all ${
+      collapsed ? 'flex-shrink-0 w-10' : 'flex-1 min-w-0'
+    } ${isSource ? 'bg-card border-primary/20' : 'bg-muted/20 border-border/50'}`}>
+      {/* Header */}
+      <button
+        onClick={() => setCollapsed(prev => !prev)}
+        className={`flex items-center gap-1.5 px-3 py-2 border-b text-xs font-medium transition-colors flex-shrink-0 ${
+          isSource
+            ? 'bg-primary/[0.04] text-foreground hover:bg-primary/[0.06]'
+            : 'bg-muted/40 text-muted-foreground hover:bg-muted/50'
+        }`}
+      >
+        {collapsed ? (
+          <ChevronDown className="h-3 w-3 -rotate-90" />
+        ) : (
+          <ChevronUp className="h-3 w-3 rotate-90" />
+        )}
+        {!collapsed && (
+          <>
+            <FileText className="h-3.5 w-3.5" />
+            <span className="truncate">{label}</span>
+            <span className={`ml-auto px-1.5 py-0.5 rounded text-[10px] font-medium whitespace-nowrap ${
+              isSource ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+            }`}>
+              AI Simulation
+            </span>
+          </>
+        )}
+      </button>
+
+      {/* Content — only the simulated version; current writing is in the editor */}
+      {!collapsed && (
+        <div className="flex-1 overflow-y-auto p-3">
+          <div className={`text-sm leading-relaxed ${isSource ? 'text-foreground/90' : 'text-foreground/60'}`}>
+            <DiffHighlightedText oldText={currentText} newText={simulatedText} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Inline diff text: shows the simulated "new" version with added parts highlighted
+function DiffHighlightedText({
+  oldText,
+  newText,
+}: {
+  oldText: string;
+  newText: string;
+}) {
+  const segments = useMemo(() => {
+    const oldTokens = oldText.match(/\S+|\s+/g) || [];
+    const newTokens = newText.match(/\S+|\s+/g) || [];
+
+    // LCS
+    const m = oldTokens.length;
+    const n = newTokens.length;
+    const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        dp[i][j] = oldTokens[i - 1] === newTokens[j - 1]
+          ? dp[i - 1][j - 1] + 1
+          : Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+
+    const ops: Array<{ type: 'equal' | 'added' | 'removed'; token: string }> = [];
+    let i = m, j = n;
+    while (i > 0 && j > 0) {
+      if (oldTokens[i - 1] === newTokens[j - 1]) {
+        ops.push({ type: 'equal', token: oldTokens[i - 1] });
+        i--; j--;
+      } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+        ops.push({ type: 'removed', token: oldTokens[i - 1] });
+        i--;
+      } else {
+        ops.push({ type: 'added', token: newTokens[j - 1] });
+        j--;
+      }
+    }
+    while (i > 0) { ops.push({ type: 'removed', token: oldTokens[i - 1] }); i--; }
+    while (j > 0) { ops.push({ type: 'added', token: newTokens[j - 1] }); j--; }
+    ops.reverse();
+
+    // Merge consecutive same-type
+    const merged: Array<{ type: 'equal' | 'added' | 'removed'; text: string }> = [];
+    for (const op of ops) {
+      const last = merged[merged.length - 1];
+      if (last && last.type === op.type) last.text += op.token;
+      else merged.push({ type: op.type, text: op.token });
+    }
+    return merged;
+  }, [oldText, newText]);
+
+  // Show equal + added (highlight added), skip removed
+  return (
+    <>
+      {segments.filter(s => s.type !== 'removed').map((seg, i) =>
+        seg.type === 'equal'
+          ? <span key={i}>{seg.text}</span>
+          : <span key={i} className="text-primary font-medium underline decoration-primary/40 decoration-2 underline-offset-2">{seg.text}</span>
+      )}
+    </>
+  );
+}
+
+// Writing preview — collapsible side-by-side with AI simulation badge (scaffold mode)
 function WritingPreviewPanel({
   currentPreview,
   changedPreview,
@@ -541,17 +657,26 @@ function WritingPreviewPanel({
 
   const label = mode === 'scaffold'
     ? (isSource ? 'Writing Scaffold Preview' : 'Writing Scaffold Impact')
-    : (isSource ? 'Writing Preview' : 'Writing Impact Preview');
+    : (isSource ? 'Simulated Writing Change' : 'Simulated Writing Impact');
 
   return (
-    <div className="border-b">
+    <div className={`border-b ${isSource ? 'bg-primary/[0.02]' : 'bg-muted/20'}`}>
       <button
         onClick={() => setCollapsed(prev => !prev)}
-        className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted/30 transition-colors"
+        className={`w-full flex items-center justify-between px-3 py-1.5 text-xs font-medium transition-colors ${
+          isSource
+            ? 'text-foreground hover:bg-primary/[0.04]'
+            : 'text-muted-foreground hover:bg-muted/30'
+        }`}
       >
         <div className="flex items-center gap-1.5">
           <FileText className="h-3.5 w-3.5" />
           <span>{label}</span>
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+            isSource ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+          }`}>
+            AI Simulation
+          </span>
         </div>
         {collapsed ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
       </button>
@@ -560,7 +685,7 @@ function WritingPreviewPanel({
           <SideBySideDiff
             oldText={currentPreview}
             newText={changedPreview}
-            className={`text-sm leading-relaxed ${mode === 'scaffold' ? 'text-foreground/70' : 'text-foreground/90'}`}
+            className={`text-sm leading-relaxed ${isSource ? 'text-foreground/80' : 'text-foreground/60'}`}
           />
         </div>
       )}
