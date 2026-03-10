@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useRef } from "react";
 import type { IntentBlock } from "@/lib/partykit";
-import { ChevronDown, ChevronRight, Trash2, ChevronLeft, Link2, Pencil, MessageSquare, MoreHorizontal } from "lucide-react";
+import { ChevronDown, ChevronRight, Trash2, ChevronLeft, Link2, Pencil, MessageSquare, MoreHorizontal, Check, Eye, Plus, Minus, Edit2 } from "lucide-react";
+import UserAvatar from "@/components/user/UserAvatar";
+import type { SectionNotification } from "../IntentPanelContext";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -340,6 +342,46 @@ export function RootIntentBlock({ block, rootIndex }: RootIntentBlockProps) {
             </div>
           </div>
 
+          {/* Incoming change notifications — shown on impacted sections */}
+          {!ctx.isSetupPhase && (() => {
+            const notifications = ctx.getSectionNotifications(block.id);
+            const unacked = notifications.filter(n =>
+              !n.acknowledged && n.notifyLevel !== 'skip'
+              // Negotiate types are shown in ActionRequiredBar, not here
+              && n.proposeType !== 'negotiate' && n.proposeType !== 'input' && n.proposeType !== 'discussion'
+            );
+            if (unacked.length === 0) return null;
+            return (
+              <div className="mt-2 space-y-2">
+                {unacked.map(n => (
+                  <NotificationCard
+                    key={n.proposalId}
+                    notification={n}
+                    onAcknowledge={() => {
+                      fetch('/api/proposals/vote', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ proposalId: n.proposalId, vote: 'acknowledge' }),
+                      }).then(() => ctx.refreshProposals());
+                    }}
+                    onViewDetails={() => {
+                      ctx.setViewingProposalId(n.proposalId);
+                      ctx.setViewingProposalForSectionId(block.id);
+                      ctx.setViewingProposalAffectedSectionId(block.id);
+                    }}
+                    onEscalate={() => {
+                      fetch('/api/proposals/vote', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ proposalId: n.proposalId, vote: 'escalate' }),
+                      }).then(() => ctx.refreshProposals());
+                    }}
+                  />
+                ))}
+              </div>
+            );
+          })()}
+
           {/* Render children */}
           {renderChildren()}
         </div>
@@ -359,6 +401,125 @@ export function RootIntentBlock({ block, rootIndex }: RootIntentBlockProps) {
         {/* Writing panel — hidden in setup phase */}
         {!ctx.isSetupPhase && (
           <WritingSectionPanel block={block} children={children} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Heads-up notification card (lightweight, dismissible) ───
+
+function NotificationCard({
+  notification: n,
+  onAcknowledge,
+  onViewDetails,
+  onEscalate,
+}: {
+  notification: SectionNotification;
+  onAcknowledge: () => void;
+  onViewDetails: () => void;
+  onEscalate: () => void;
+}) {
+  const isStrong = n.notifyLevel === 'notify';
+  // Note: negotiate types are filtered out by the caller — this component only handles 'decided'
+
+  return (
+    <div className={`rounded-lg border ${
+      isStrong
+        ? n.impactLevel === 'significant'
+          ? 'bg-amber-50/50 border-amber-200 dark:bg-amber-900/15 dark:border-amber-800'
+          : 'bg-blue-50/50 border-blue-200 dark:bg-blue-900/15 dark:border-blue-800'
+        : 'bg-muted/20 border-border'
+    }`}>
+      {/* 1. Who changed where → affects your part */}
+      <div className="flex items-center gap-2 px-3 pt-2.5 pb-1.5">
+        <UserAvatar
+          avatarUrl={n.proposedByAvatar}
+          name={n.proposedByName}
+          className="h-5 w-5 flex-shrink-0"
+        />
+        <div className="text-xs flex-1 min-w-0">
+          <span className="font-semibold">{n.proposedByName}</span>
+          <span className="text-muted-foreground"> changed </span>
+          <span className="font-semibold">{n.sourceSectionName}</span>
+          <span className="text-muted-foreground">, affecting your section</span>
+        </div>
+      </div>
+
+      {/* 2. What's affected + how */}
+      {n.suggestedChanges && n.suggestedChanges.length > 0 ? (
+        <div className="px-3 pb-1.5">
+          <div className="space-y-1 ml-7">
+            {n.suggestedChanges.map((sc, idx) => (
+              <div
+                key={idx}
+                className={`flex items-start gap-1.5 text-xs rounded px-2 py-1 ${
+                  sc.action === 'add' ? 'bg-emerald-50/80 dark:bg-emerald-900/15' :
+                  sc.action === 'remove' ? 'bg-red-50/80 dark:bg-red-900/15' :
+                  'bg-amber-50/80 dark:bg-amber-900/15'
+                }`}
+              >
+                {sc.action === 'add' && <Plus className="h-3 w-3 text-emerald-600 flex-shrink-0 mt-0.5" />}
+                {sc.action === 'modify' && <Edit2 className="h-3 w-3 text-amber-600 flex-shrink-0 mt-0.5" />}
+                {sc.action === 'remove' && <Minus className="h-3 w-3 text-red-500 flex-shrink-0 mt-0.5" />}
+                <div className="flex-1 min-w-0">
+                  <span className={sc.action === 'remove' ? 'line-through text-red-500/70' : ''}>
+                    {sc.content}
+                  </span>
+                  {sc.reason && (
+                    <span className="text-muted-foreground ml-1">— {sc.reason}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="px-3 pb-1.5 ml-7 text-xs text-muted-foreground">
+          {n.reason}
+        </div>
+      )}
+
+      {/* 3. Why — reasoning / personal note */}
+      <div className="px-3 pb-2 ml-7">
+        {n.personalNote ? (
+          <div className="text-xs text-foreground/70 italic leading-relaxed">
+            &ldquo;{n.personalNote}&rdquo;
+          </div>
+        ) : n.suggestedChanges && n.suggestedChanges.length > 0 ? (
+          <div className="text-xs text-muted-foreground leading-relaxed">
+            {n.reason}
+          </div>
+        ) : null}
+      </div>
+
+      {/* 4. Actions — Review + OK/Got it + optional Discuss */}
+      <div className="flex items-center gap-2 px-3 pb-2.5 ml-7">
+        <button
+          onClick={(e) => { e.stopPropagation(); onViewDetails(); }}
+          className={`flex items-center gap-1 text-[10px] font-medium transition-colors px-2.5 py-1 rounded-md border ${
+            isStrong
+              ? 'bg-primary text-primary-foreground border-primary hover:bg-primary/90'
+              : 'text-primary border-primary/30 hover:bg-primary/5'
+          }`}
+        >
+          <Eye className="h-3 w-3" />
+          Review
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); onAcknowledge(); }}
+          className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded-md hover:bg-muted border"
+        >
+          <Check className="h-3 w-3" />
+          {isStrong ? 'OK' : 'Got it'}
+        </button>
+        {isStrong && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onEscalate(); }}
+            className="flex items-center gap-1 text-[10px] font-medium text-amber-600 hover:text-amber-700 transition-colors px-2 py-1 rounded-md hover:bg-amber-50 border border-amber-200 dark:border-amber-800"
+          >
+            Discuss
+          </button>
         )}
       </div>
     </div>

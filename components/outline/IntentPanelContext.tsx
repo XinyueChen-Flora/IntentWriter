@@ -67,6 +67,10 @@ export type ActiveDiffSession = {
   sectionImpacts: Map<string, SectionImpactData>;
   // Writing previews (keyed by sectionId) — auto for source+significant, manual for minor
   writingPreviews: Map<string, WritingPreview>;
+  // AI-simulated outline changes for the source section (from comment flow)
+  sourceChanges?: Array<{ id: string; content: string; status: 'new' | 'modified' | 'removed'; reason?: string }>;
+  // When true, skip writing preview for source section (initiated from writing side)
+  sourceFromWriting?: boolean;
   // For "Modify Outline" mode - intent being modified/removed
   modifyIntent?: {
     intentId: string;
@@ -94,6 +98,10 @@ export type DraftItem = {
   originalContent: string;
   isNew: boolean;       // newly added by user
   isRemoved: boolean;   // marked for deletion by user
+  // Tracks if this item already had a change from a prior proposal
+  priorChangeStatus?: 'added' | 'modified' | 'removed';
+  priorChangeBy?: string;      // who made the prior change
+  priorChangeAt?: number;      // when the prior change was made
 };
 
 // Proposal draft — the editing state before simulation
@@ -106,6 +114,31 @@ export type ProposalDraft = {
   comment?: string;
   // Which block triggered this (for highlighting in left outline)
   triggerIntentId?: string;
+  // When initiated from writing side, skip source section writing preview
+  sourceFromWriting?: boolean;
+};
+
+// Notification for a section that's been impacted by someone else's change
+export type SectionNotification = {
+  proposalId: string;
+  proposeType: 'decided' | 'negotiate' | 'input' | 'discussion';
+  proposedBy: string;
+  proposedByName: string;
+  proposedByAvatar?: string;
+  sourceSectionId: string;
+  sourceSectionName: string;
+  impactLevel: 'minor' | 'significant';
+  notifyLevel: 'skip' | 'heads-up' | 'notify';
+  reason: string;
+  personalNote?: string;
+  suggestedChanges?: Array<{
+    action: 'add' | 'modify' | 'remove';
+    intentId?: string;
+    content: string;
+    reason: string;
+  }>;
+  createdAt: string;
+  acknowledged: boolean; // whether current user has responded
 };
 
 export type SetupTab = 'outline' | 'assign' | 'relationships';
@@ -218,6 +251,16 @@ export type IntentPanelContextValue = {
   proposalDraft: ProposalDraft | null;
   setProposalDraft: (draft: ProposalDraft | null) => void;
   openProposalDraft: (rootIntentId: string, action: 'change' | 'comment', triggerIntentId?: string) => void;
+  // Viewing a submitted proposal
+  viewingProposalId: string | null;
+  setViewingProposalId: (id: string | null) => void;
+  viewingProposalForSectionId: string | null;
+  setViewingProposalForSectionId: (id: string | null) => void;
+  viewingProposalAffectedSectionId: string | null;
+  setViewingProposalAffectedSectionId: (id: string | null) => void;
+  // Section notifications — pending impacts from other people's changes
+  getSectionNotifications: (sectionId: string) => SectionNotification[];
+  refreshProposals: () => void;
 };
 
 const IntentPanelContext = createContext<IntentPanelContextValue | null>(null);

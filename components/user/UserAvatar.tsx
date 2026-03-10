@@ -27,7 +27,7 @@ export default function UserAvatar({ avatarUrl, name, email, className }: UserAv
 
   return (
     <Avatar className={className}>
-      {avatarUrl && <AvatarImage src={avatarUrl} alt={name || email || "User"} />}
+      {avatarUrl && <AvatarImage src={avatarUrl} alt={name || email || "User"} referrerPolicy="no-referrer" crossOrigin="anonymous" />}
       <AvatarFallback className="bg-primary text-primary-foreground">
         {getInitials()}
       </AvatarFallback>

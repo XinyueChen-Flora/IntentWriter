@@ -6,6 +6,7 @@ import type { IntentBlock } from "@/lib/partykit";
 import type { DocumentMember } from "@/lib/types";
 import type { User } from "@supabase/supabase-js";
 import { getUserColor } from "@/lib/getUserColor";
+import UserAvatar from "@/components/user/UserAvatar";
 
 type AssignDropdownProps = {
   block: IntentBlock;
@@ -55,18 +56,12 @@ export function AssignDropdown({
         }`}
         title="Click to unassign"
       >
-        <div
-          className={`${sizeClass} rounded-full overflow-hidden flex items-center justify-center text-white font-semibold flex-shrink-0 ${
-            compact ? 'text-[6px]' : 'text-[7px]'
-          }`}
-          style={!assigneeAvatar ? { backgroundColor: getUserColor(block.assignee!) } : undefined}
-        >
-          {assigneeAvatar ? (
-            <img src={assigneeAvatar} alt="" className="h-full w-full object-cover" />
-          ) : (
-            (block.assigneeName || block.assigneeEmail || 'U').substring(0, 2).toUpperCase()
-          )}
-        </div>
+        <UserAvatar
+          avatarUrl={assigneeAvatar}
+          name={block.assigneeName}
+          email={block.assigneeEmail}
+          className={`${sizeClass} flex-shrink-0`}
+        />
         <span className={`font-medium ${compact ? 'text-xs' : 'text-sm'}`}>
           {block.assignee === currentUser.id
             ? 'You'
@@ -107,16 +102,12 @@ export function AssignDropdown({
                   className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-secondary transition-colors text-left"
                 >
                   <div className="relative flex-shrink-0">
-                    <div
-                      className="h-6 w-6 rounded-full overflow-hidden flex items-center justify-center text-xs font-semibold text-white"
-                      style={!avatar ? { backgroundColor: getUserColor(member.userId) } : undefined}
-                    >
-                      {avatar ? (
-                        <img src={avatar} alt="" className="h-full w-full object-cover" />
-                      ) : (
-                        (member.name || member.email || 'U').substring(0, 2).toUpperCase()
-                      )}
-                    </div>
+                    <UserAvatar
+                      avatarUrl={avatar}
+                      name={member.name}
+                      email={member.email}
+                      className="h-6 w-6"
+                    />
                     <div
                       className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-popover ${
                         isOnline ? 'bg-green-500' : 'bg-gray-300'

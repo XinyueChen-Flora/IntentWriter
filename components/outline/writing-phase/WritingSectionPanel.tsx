@@ -8,6 +8,7 @@ import { useIntentPanelContext } from "../IntentPanelContext";
 import { CoverageIcon } from "../ui/CoverageIcons";
 import { InlineDiffView } from "@/components/simulate/InlineDiffView";
 import { ProposalPanel } from "@/components/simulate/ProposalPanel";
+import { ProposalViewer } from "@/components/simulate/ProposalViewer";
 import { SideBySideDiff } from "@/components/simulate/SideBySideDiff";
 import { AlignmentSummary, type AlignmentItem, type AlignmentStatus } from "../alignment";
 
@@ -128,10 +129,22 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
         />
       )}
 
-      {/* Inline Diff View - shows on OTHER impacted sections */}
+      {/* Proposal Viewer - shows on the affected person's section */}
+      {ctx.viewingProposalId && !ctx.proposalDraft &&
+        ctx.viewingProposalForSectionId === block.id && (
+        <ProposalViewer />
+      )}
+
+      {/* Inline Diff View - shows on impacted sections AND source section (comment flow) */}
       {(() => {
-        const isSourceSection = ctx.activeDiffSession?.sourceSectionId === block.id;
+        const session = ctx.activeDiffSession;
+        if (!session) return null;
+
+        // Source section: outline changes are shown in ProposalPanel, skip here
+        const isSourceSection = session.sourceSectionId === block.id;
         if (isSourceSection) return null;
+
+        // Other sections: show cross-section impact
         const sectionImpact = ctx.getSectionImpact?.(block.id);
         if (!sectionImpact) return null;
 
@@ -141,7 +154,7 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
             currentChildren={children}
             rootBlock={block}
             sectionImpact={sectionImpact}
-            isLoading={ctx.activeDiffSession?.isLoading}
+            isLoading={session.isLoading}
             onClose={() => ctx.setActiveDiffSession(null)}
           />
         );
@@ -317,6 +330,80 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
                 ctx.setActiveDiffSession(null);
               }
             }}
+            onProposeChange={(item) => {
+              // Direct propose: build draft items with pre-applied modification
+              const rootBlock = ctx.blocks.find(b => b.id === block.id);
+              const children = ctx.blocks
+                .filter(b => b.parentId === block.id)
+                .sort((a, b) => a.position - b.position);
+
+              const baseDraftItems = [
+                ...(rootBlock ? [{
+                  id: rootBlock.id,
+                  content: rootBlock.content,
+                  originalContent: rootBlock.content,
+                  isNew: false,
+                  isRemoved: false,
+                }] : []),
+                ...children.map(child => ({
+                  id: child.id,
+                  content: child.content,
+                  originalContent: child.content,
+                  isNew: false,
+                  isRemoved: false,
+                })),
+              ];
+
+              let draftItems = baseDraftItems;
+              if (item.status === 'missing' && item.intentId) {
+                // Missing in writing → propose removing from outline
+                draftItems = baseDraftItems.map(d =>
+                  d.id === item.intentId ? { ...d, isRemoved: true } : d
+                );
+              } else if (item.status === 'orphan') {
+                // Orphan in writing → propose adding as new outline point
+                draftItems = [
+                  ...baseDraftItems,
+                  {
+                    id: `new-${Date.now()}`,
+                    content: item.intentContent || item.writingText || '',
+                    originalContent: '',
+                    isNew: true,
+                    isRemoved: false,
+                  },
+                ];
+              }
+
+              // Clear any existing diff session and set draft directly
+              ctx.setActiveDiffSession(null);
+              ctx.setProposalDraft({
+                rootIntentId: block.id,
+                action: 'change',
+                draftItems,
+                triggerIntentId: item.intentId || block.id,
+                sourceFromWriting: true,
+              });
+            }}
+            onAddComment={(item) => {
+              // Discussion mode: open comment with pre-populated text
+              let comment = '';
+              if (item.status === 'missing') {
+                comment = `"${item.intentContent}" doesn't seem to be addressed in the writing yet. Maybe we should reconsider whether it still belongs in this section, or rephrase it to better fit what we've written so far.`;
+              } else if (item.status === 'partial') {
+                comment = `"${item.intentContent}" is only partially covered right now. We might want to either narrow this outline point to match what's actually written, or expand the writing if full coverage matters here.`;
+              } else if (item.status === 'orphan') {
+                comment = `There's content about "${item.intentContent || item.writingText}" that goes beyond our current outline. Should we add this as a new point, or fold it into an existing one?`;
+              }
+
+              ctx.openProposalDraft(block.id, 'comment', item.intentId || block.id);
+              ctx.setProposalDraft({
+                rootIntentId: block.id,
+                action: 'comment',
+                comment,
+                triggerIntentId: item.intentId || block.id,
+                sourceFromWriting: true,
+              });
+            }}
           />
         )}
 
@@ -329,6 +416,9 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
           const isSource = session.sourceSectionId === block.id;
           const sectionImpact = ctx.getSectionImpact?.(block.id);
           const isMinor = !isSource && sectionImpact?.impactLevel === 'minor';
+
+          // Skip writing preview for source section when initiated from writing side
+          if (isSource && session.sourceFromWriting) return null;
 
           // For minor impact without preview loaded: show trigger button
           if (isMinor && !writingPreview) {
@@ -506,9 +596,10 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
       {(() => {
         const session = ctx.activeDiffSession;
         if (!session) return null;
+        const isSource = session.sourceSectionId === block.id;
+        if (isSource && session.sourceFromWriting) return null;
         const wp = session.writingPreviews?.get(block.id);
         if (wp?.mode !== 'prose' || wp.isLoading || (!wp.currentPreview && !wp.changedPreview)) return null;
-        const isSource = session.sourceSectionId === block.id;
         return (
           <ProseSimulationPanel
             currentText={wp.currentPreview}

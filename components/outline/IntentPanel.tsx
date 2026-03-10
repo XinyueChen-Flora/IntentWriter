@@ -41,6 +41,7 @@ import {
   RelationshipCreatorPopup,
   RelationshipSidePanel,
 } from './relationship';
+import { ActionRequiredBar } from './ui/ActionRequiredBar';
 
 type IntentPanelProps = {
   blocks: readonly IntentBlock[];
@@ -232,7 +233,146 @@ export default function IntentPanel({
   // Proposal draft — editing state before simulation
   const [proposalDraft, setProposalDraft] = useState<ProposalDraft | null>(null);
 
+  // Viewing a submitted proposal
+  const [viewingProposalId, setViewingProposalId] = useState<string | null>(null);
+  const [viewingProposalForSectionId, setViewingProposalForSectionId] = useState<string | null>(null);
+  const [viewingProposalAffectedSectionId, setViewingProposalAffectedSectionId] = useState<string | null>(null);
+
+  // ─── Proposals & section notifications ───
+  type ProposalRecord = {
+    id: string;
+    section_id: string;
+    proposed_by: string;
+    proposed_by_name: string;
+    propose_type: 'decided' | 'negotiate' | 'input' | 'discussion';
+    status: string;
+    created_at: string;
+    notify_user_ids: string[];
+    notify_levels: Record<string, string>;
+    personal_notes: Record<string, string>;
+    section_impacts: Array<{
+      sectionId: string;
+      impactLevel: string;
+      reason: string;
+      suggestedChanges?: Array<{
+        action: 'add' | 'modify' | 'remove';
+        intentId?: string;
+        content: string;
+        reason: string;
+      }>;
+    }>;
+    proposal_votes: Array<{ user_id: string; vote: string }>;
+  };
+  const [proposals, setProposals] = useState<ProposalRecord[]>([]);
+
+  const refreshProposals = useCallback(() => {
+    if (!roomId) return;
+    fetch(`/api/proposals?documentId=${roomId}`)
+      .then(res => res.json())
+      .then(data => setProposals(data.proposals || []))
+      .catch(console.error);
+  }, [roomId]);
+
+  // Fetch proposals on mount and when phase changes
+  useEffect(() => {
+    if (!isSetupPhase) refreshProposals();
+  }, [isSetupPhase, refreshProposals]);
+
+  // Auto-open ProposalViewer for 'notify' level notifications on entry
+  const autoOpenedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (isSetupPhase || viewingProposalId || proposals.length === 0) return;
+    // Find the first unacked 'notify' level notification
+    for (const p of proposals) {
+      if (p.status !== 'pending' || p.proposed_by === currentUser.id) continue;
+      if (autoOpenedRef.current.has(p.id)) continue;
+      const levels = p.notify_levels || {};
+      // Check if any of my assigned sections have 'notify' level
+      const myNotifySections = blocks.filter(b =>
+        b.assignee === currentUser.id &&
+        levels[b.id] === 'notify'
+      );
+      if (myNotifySections.length === 0) continue;
+      // Check if user hasn't already responded
+      const userVote = p.proposal_votes.find(v => v.user_id === currentUser.id);
+      if (userVote) continue;
+      // Auto-open this proposal on the first affected section
+      autoOpenedRef.current.add(p.id);
+      setViewingProposalId(p.id);
+      setViewingProposalForSectionId(myNotifySections[0].id);
+      setViewingProposalAffectedSectionId(myNotifySections[0].id);
+      break;
+    }
+  }, [proposals, isSetupPhase, viewingProposalId, currentUser.id, blocks]);
+
+  // Derive per-section notifications for the current user
+  const getSectionNotifications = useCallback((sectionId: string): import('./IntentPanelContext').SectionNotification[] => {
+    return proposals
+      .filter(p => p.status === 'pending')
+      .flatMap(p => {
+        // Don't show notification for your own proposals
+        if (p.proposed_by === currentUser.id) return [];
+
+        // Check if this section is directly impacted
+        const impact = (p.section_impacts || []).find(
+          si => si.sectionId === sectionId && si.impactLevel !== 'none'
+        );
+
+        // Only show on sections that are impacted and assigned to current user
+        const mySection = blocks.find(b => b.id === sectionId && b.assignee === currentUser.id);
+        if (!mySection) return [];
+
+        // Derive notify level for this section from stored notify_levels
+        // If notify_levels column is empty/missing, fall back to impact-based defaults
+        const storedLevels = p.notify_levels || {};
+        let notifyLevel: 'skip' | 'heads-up' | 'notify' =
+          (storedLevels[sectionId] as 'skip' | 'heads-up' | 'notify') || 'skip';
+
+        // Fallback: derive from impact level when notify_levels not stored
+        if (notifyLevel === 'skip' && impact) {
+          notifyLevel = impact.impactLevel === 'significant' ? 'notify' : 'heads-up';
+        }
+
+        // For negotiate types, default to 'notify' even without impact data
+        // (the proposer wants all involved people to respond)
+        const isNegotiateType = p.propose_type === 'negotiate' || p.propose_type === 'input' || p.propose_type === 'discussion';
+        if (notifyLevel === 'skip' && isNegotiateType) {
+          notifyLevel = 'notify';
+        }
+
+        // No impact and no explicit notify level → skip entirely
+        if (notifyLevel === 'skip') return [];
+
+        // Check if user already responded
+        const userVote = p.proposal_votes.find(v => v.user_id === currentUser.id);
+        const sourceSectionBlock = blocks.find(b => b.id === p.section_id);
+
+        // Find personal note for this section (stored in writing_previews or as part of notify data)
+        // Personal notes are stored alongside notify_levels in the proposal
+        const personalNotes = p.personal_notes || {};
+
+        return [{
+          proposalId: p.id,
+          proposeType: p.propose_type,
+          proposedBy: p.proposed_by,
+          proposedByName: p.proposed_by_name,
+          proposedByAvatar: documentMembers.find(m => m.userId === p.proposed_by)?.avatarUrl || undefined,
+          sourceSectionId: p.section_id,
+          sourceSectionName: sourceSectionBlock?.content || 'Unknown section',
+          impactLevel: impact ? impact.impactLevel as 'minor' | 'significant' : 'minor',
+          notifyLevel,
+          reason: impact ? impact.reason : 'General team update',
+          personalNote: personalNotes[sectionId] || undefined,
+          suggestedChanges: impact?.suggestedChanges,
+          createdAt: p.created_at,
+          acknowledged: !!userVote,
+        }];
+      });
+  }, [proposals, currentUser.id, blocks, documentMembers]);
+
   // Open a proposal draft for a section (clones children into editable items)
+  // Respects existing change statuses: removed items start as isRemoved, added items as isNew,
+  // modified items show previous content as originalContent so the diff is visible
   const openProposalDraft = useCallback((rootIntentId: string, action: 'change' | 'comment', triggerIntentId?: string) => {
     if (action === 'change') {
       const rootBlock = blocks.find(b => b.id === rootIntentId);
@@ -244,17 +384,23 @@ export default function IntentPanel({
         ...(rootBlock ? [{
           id: rootBlock.id,
           content: rootBlock.content,
-          originalContent: rootBlock.content,
-          isNew: false,
-          isRemoved: false,
+          originalContent: rootBlock.previousContent || rootBlock.content,
+          isNew: rootBlock.changeStatus === 'added',
+          isRemoved: rootBlock.changeStatus === 'removed',
+          priorChangeStatus: rootBlock.changeStatus as DraftItem['priorChangeStatus'],
+          priorChangeBy: rootBlock.changeByName,
+          priorChangeAt: rootBlock.changeAt,
         }] : []),
-        // Children
+        // Children — reflect existing change status
         ...children.map(child => ({
           id: child.id,
           content: child.content,
-          originalContent: child.content,
-          isNew: false,
-          isRemoved: false,
+          originalContent: child.previousContent || child.content,
+          isNew: child.changeStatus === 'added',
+          isRemoved: child.changeStatus === 'removed',
+          priorChangeStatus: child.changeStatus as DraftItem['priorChangeStatus'],
+          priorChangeBy: child.changeByName,
+          priorChangeAt: child.changeAt,
         })),
       ];
       setProposalDraft({ rootIntentId, action, draftItems, triggerIntentId });
@@ -485,18 +631,25 @@ export default function IntentPanel({
       return contents;
     })();
 
-    // Build proposedChanges from the draft
-    const draft = proposalDraft;
-    if (!draft?.draftItems) return;
+    // Build proposedChanges from the draft or from sourceChanges (comment flow)
+    let proposedChanges: Array<{ id: string; content: string; status: string }> = [];
 
-    const proposedChanges = draft.draftItems
-      .map(item => {
-        if (item.isNew && item.content.trim()) return { id: `new-${item.id}`, content: item.content, status: 'new' };
-        if (item.isRemoved) return { id: item.id, content: item.originalContent, status: 'removed' };
-        if (item.content !== item.originalContent) return { id: item.id, content: item.content, status: 'modified' };
-        return null;
-      })
-      .filter((p): p is NonNullable<typeof p> => p !== null);
+    if (session.sourceChanges && session.sourceChanges.length > 0) {
+      // Comment flow: use the AI-simulated source changes
+      proposedChanges = session.sourceChanges.map(c => ({ id: c.id, content: c.content, status: c.status }));
+    } else if (proposalDraft?.draftItems) {
+      // Change flow: build from draft items
+      proposedChanges = proposalDraft.draftItems
+        .map(item => {
+          if (item.isNew && item.content.trim()) return { id: `new-${item.id}`, content: item.content, status: 'new' };
+          if (item.isRemoved) return { id: item.id, content: item.originalContent, status: 'removed' };
+          if (item.content !== item.originalContent) return { id: item.id, content: item.content, status: 'modified' };
+          return null;
+        })
+        .filter((p): p is NonNullable<typeof p> => p !== null);
+    }
+
+    if (proposedChanges.length === 0) return;
 
     writingContentsPromise.then(writingContents => {
       fetchWritingPreview(sectionId, session.sourceSectionId, proposedChanges, session.sectionImpacts, writingContents, session);
@@ -515,22 +668,7 @@ export default function IntentPanel({
     };
     const rootId = findRootId(proposals[0].intentId);
 
-    // Build proposed changes for the simulate API
-    const proposedChanges: Array<{ id: string; content: string; status: 'new' | 'modified' | 'removed' }> = [];
-
-    for (const proposal of proposals) {
-      if (proposal.type === 'edit') {
-        proposedChanges.push({ id: proposal.intentId, content: proposal.content, status: 'modified' });
-      } else if (proposal.type === 'remove') {
-        proposedChanges.push({ id: proposal.intentId, content: proposal.content, status: 'removed' });
-      } else if (proposal.type === 'add') {
-        proposedChanges.push({ id: `proposed-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, content: proposal.content, status: 'new' });
-      } else if (proposal.type === 'comment') {
-        proposedChanges.push({ id: proposal.intentId, content: `[Comment] ${proposal.content}`, status: 'modified' });
-      }
-    }
-
-    // Set up diff session with loading state
+    // Set up diff session with loading state immediately
     setActiveDiffSession({
       sourceSectionId: rootId,
       isLoading: true,
@@ -538,6 +676,68 @@ export default function IntentPanel({
       writingPreviews: new Map(),
       proposal: proposals[0],
     });
+
+    // Build proposed changes for the simulate API
+    let proposedChanges: Array<{ id: string; content: string; status: 'new' | 'modified' | 'removed' }> = [];
+
+    const isCommentFlow = proposals.length === 1 && proposals[0].type === 'comment';
+
+    if (isCommentFlow) {
+      // Comment flow: first ask AI to simulate what outline changes the comment implies
+      const commentProposal = proposals[0];
+      const rootBlock = blocks.find(b => b.id === rootId);
+      const sourceChildren = blocks
+        .filter(b => b.parentId === rootId)
+        .map((c, idx) => ({ id: c.id, content: c.content, position: idx }));
+
+      try {
+        const simRes = await fetch('/api/simulate-comment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            comment: commentProposal.content,
+            targetIntentId: commentProposal.intentId,
+            sectionIntent: rootBlock?.content || '',
+            sectionChildren: sourceChildren,
+          }),
+        });
+
+        if (simRes.ok) {
+          const simData = await simRes.json();
+          const simChanges: Array<{ id: string; content: string; status: 'new' | 'modified' | 'removed'; reason?: string }> =
+            (simData.proposedChanges || []).map((c: any) => ({
+              id: c.id as string,
+              content: c.content as string,
+              status: c.status as 'new' | 'modified' | 'removed',
+              reason: c.reason as string | undefined,
+            }));
+          proposedChanges = simChanges.map(c => ({ id: c.id, content: c.content, status: c.status }));
+
+          // Store source changes in the session so they can be displayed
+          setActiveDiffSession(prev => prev ? {
+            ...prev,
+            sourceChanges: simChanges,
+          } : prev);
+        }
+      } catch (error) {
+        console.error('Failed to simulate comment:', error);
+      }
+
+      // If AI returned nothing, fall back to the old behavior
+      if (proposedChanges.length === 0) {
+        proposedChanges.push({ id: commentProposal.intentId, content: `[Comment] ${commentProposal.content}`, status: 'modified' });
+      }
+    } else {
+      for (const proposal of proposals) {
+        if (proposal.type === 'edit') {
+          proposedChanges.push({ id: proposal.intentId, content: proposal.content, status: 'modified' });
+        } else if (proposal.type === 'remove') {
+          proposedChanges.push({ id: proposal.intentId, content: proposal.content, status: 'removed' });
+        } else if (proposal.type === 'add') {
+          proposedChanges.push({ id: `proposed-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, content: proposal.content, status: 'new' });
+        }
+      }
+    }
 
     try {
       // Get writing content for all sections
@@ -584,6 +784,7 @@ export default function IntentPanel({
         const data = await response.json();
         const impactMap = new Map<string, any>();
         (data.impacts || []).forEach((impact: any) => {
+          if (impact.impactLevel === 'none') return;
           impactMap.set(impact.sectionId, {
             sectionId: impact.sectionId,
             sectionIntent: impact.sectionIntent,
@@ -602,11 +803,21 @@ export default function IntentPanel({
           sectionImpacts: impactMap,
           writingPreviews: new Map(),
           proposal: proposals[0],
+          sourceChanges: isCommentFlow ? proposedChanges.map(c => ({ ...c, status: c.status })) : undefined,
         };
-        setActiveDiffSession(session);
+        // Carry forward sourceFromWriting flag from proposal draft
+        const isFromWriting = proposalDraft?.sourceFromWriting;
+
+        // Preserve sourceChanges with reasons from simulate-comment step
+        setActiveDiffSession(prev => ({
+          ...session,
+          sourceChanges: prev?.sourceChanges || session.sourceChanges,
+          sourceFromWriting: isFromWriting,
+        }));
 
         // Auto-trigger writing previews for source + significant impact sections
-        const autoPreviewIds = [rootId];
+        // Skip source section when initiated from writing side (writing already exists)
+        const autoPreviewIds = isFromWriting ? [] : [rootId];
         impactMap.forEach((impact, sectionId) => {
           if (impact.impactLevel === 'significant') {
             autoPreviewIds.push(sectionId);
@@ -621,7 +832,7 @@ export default function IntentPanel({
       console.error('Failed to simulate proposal impact:', error);
       setActiveDiffSession(null);
     }
-  }, [blocks, getWritingContent]);
+  }, [blocks, getWritingContent, proposalDraft]);
 
   const contextValue = useMemo(() => ({
     blockMap,
@@ -706,6 +917,14 @@ export default function IntentPanel({
     proposalDraft,
     setProposalDraft,
     openProposalDraft,
+    viewingProposalId,
+    setViewingProposalId,
+    viewingProposalForSectionId,
+    setViewingProposalForSectionId,
+    viewingProposalAffectedSectionId,
+    setViewingProposalAffectedSectionId,
+    getSectionNotifications,
+    refreshProposals,
   }), [
     blockMap, collapsedBlocks, editingBlock, hoveredBlock, selectedBlockId,
     dragDrop.dragOverId, dragDrop.activeId, isSetupPhase, activeSetupTab,
@@ -722,6 +941,8 @@ export default function IntentPanel({
     aiCoveredIntents, aiGeneratedSentences, markIntentAsCovered,
     activeDiffSession, getSectionImpact, handleProposeChange, requestWritingPreview,
     proposalDraft, openProposalDraft,
+    viewingProposalId, viewingProposalForSectionId, viewingProposalAffectedSectionId,
+    getSectionNotifications, refreshProposals,
   ]);
 
   return (
@@ -789,6 +1010,9 @@ export default function IntentPanel({
             ) : null}
           </div>
         )}
+
+        {/* Action required bar — floating notifications for vote/input/discussion */}
+        {!isSetupPhase && <ActionRequiredBar />}
 
         {/* Main content area with optional side panel */}
         <div className="flex-1 flex overflow-hidden">

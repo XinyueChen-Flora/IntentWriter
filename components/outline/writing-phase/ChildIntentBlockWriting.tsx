@@ -13,6 +13,8 @@ import { SortableBlockItem } from "../ui/SortableBlockItem";
 import { useIntentPanelContext } from "../IntentPanelContext";
 import { CoverageIcon, AiBadge } from "../ui/CoverageIcons";
 import { ChangeStatusBadge } from "../ui/ChangeStatusBadge";
+import { WordDiff } from "@/components/simulate/WordDiff";
+import UserAvatar from "@/components/user/UserAvatar";
 
 type ChildIntentBlockWritingProps = {
   block: IntentBlock;
@@ -139,13 +141,6 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
         }`}
       >
         <div className="flex items-start gap-2">
-          {/* Change status badge */}
-          {block.changeStatus && (
-            <div className="flex-shrink-0">
-              <ChangeStatusBadge status={block.changeStatus} />
-            </div>
-          )}
-
           {/* Coverage icon */}
           {childCoverageStatus && !block.changeStatus && (
             <div className="flex-shrink-0 mt-0.5">
@@ -169,17 +164,43 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
                 block.changeStatus === 'removed' ? 'line-through text-red-500 dark:text-red-400 opacity-70' : ''
               }`}
             >
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {block.content || "*empty*"}
-              </ReactMarkdown>
+              {(block.changeStatus === 'proposed' || block.changeStatus === 'modified') && block.previousContent && block.previousContent !== block.content ? (
+                <WordDiff oldText={block.previousContent} newText={block.content} />
+              ) : (
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {block.content || "*empty*"}
+                </ReactMarkdown>
+              )}
             </div>
 
-            {block.changeStatus && block.changeByName && (
-              <div className="text-xs text-muted-foreground mt-0.5">
-                {block.changeStatus === 'added' ? 'Added' :
-                 block.changeStatus === 'modified' ? 'Modified' :
-                 block.changeStatus === 'removed' ? 'Marked for removal' :
-                 'Proposed'} by {block.changeByName}
+            {/* Change trace — compact line below content */}
+            {block.changeStatus && block.changeBy && (
+              <div className="mt-0.5 px-1">
+                {block.proposalId ? (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      ctx.setViewingProposalId(block.proposalId!);
+                      ctx.setViewingProposalForSectionId(rootId);
+                      ctx.setViewingProposalAffectedSectionId(rootId);
+                    }}
+                    className="hover:opacity-80 transition-opacity"
+                  >
+                    <ChangeStatusBadge
+                      status={block.changeStatus}
+                      changeByAvatar={ctx.userAvatarMap.get(block.changeBy!)}
+                      changeBy={block.changeByName}
+                      changeAt={block.changeAt}
+                    />
+                  </button>
+                ) : (
+                  <ChangeStatusBadge
+                    status={block.changeStatus}
+                    changeByAvatar={ctx.userAvatarMap.get(block.changeBy!)}
+                    changeBy={block.changeByName}
+                    changeAt={block.changeAt}
+                  />
+                )}
               </div>
             )}
           </div>

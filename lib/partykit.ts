@@ -43,6 +43,7 @@ export type IntentBlock = {
   previousContent?: string; // Store original content when modified
   // For proposed changes - track discussion state
   proposalStatus?: 'pending' | 'approved' | 'rejected';
+  proposalId?: string; // Links to proposals table in DB
 };
 
 export type RoomMeta = {

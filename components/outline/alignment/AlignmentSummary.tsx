@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { X, List, PenLine, Sparkles } from "lucide-react";
+import { X, List, PenLine, Sparkles, MessageSquare, ArrowUpRight } from "lucide-react";
 import { AlignmentIcon, type AlignmentStatus } from "./AlignmentIcons";
 
 export type AlignmentItem = {
@@ -20,9 +20,11 @@ type AlignmentSummaryProps = {
   onItemClick?: (item: AlignmentItem) => void;
   onItemHover?: (item: AlignmentItem | null) => void;
   onExpandChange?: (status: AlignmentStatus | null) => void;
-  // Actions for missing items
+  // Actions
   onUpdateWriting?: (item: AlignmentItem) => void;
   onModifyOutline?: (item: AlignmentItem) => void;
+  onProposeChange?: (item: AlignmentItem) => void;   // Direct propose (add/remove from outline)
+  onAddComment?: (item: AlignmentItem) => void;       // Open discussion with comment
   // Loading states
   loadingItemId?: string | null;
   onClose?: () => void;
@@ -41,6 +43,8 @@ export function AlignmentSummary({
   onExpandChange,
   onUpdateWriting,
   onModifyOutline,
+  onProposeChange,
+  onAddComment,
   loadingItemId,
   onClose,
 }: AlignmentSummaryProps) {
@@ -229,21 +233,23 @@ export function AlignmentSummary({
                   </div>
 
                   {/* Action buttons - inline */}
-                  {isMissing && !isLoading && (
+                  {!isLoading && (isMissing || isPartial || isOrphan) && (
                     <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {(isMissing || isOrphan) && (
+                        <button
+                          onClick={() => onProposeChange?.(item)}
+                          className="flex items-center gap-1.5 px-2 py-1 text-xs rounded border bg-background hover:bg-muted transition-colors"
+                        >
+                          <ArrowUpRight className="h-3 w-3" />
+                          <span>Propose</span>
+                        </button>
+                      )}
                       <button
-                        onClick={() => onUpdateWriting?.(item)}
+                        onClick={() => onAddComment?.(item)}
                         className="flex items-center gap-1.5 px-2 py-1 text-xs rounded border bg-background hover:bg-muted transition-colors"
                       >
-                        <PenLine className="h-3 w-3" />
-                        <span>Simulate Writing</span>
-                      </button>
-                      <button
-                        onClick={() => onModifyOutline?.(item)}
-                        className="flex items-center gap-1.5 px-2 py-1 text-xs rounded border bg-background hover:bg-muted transition-colors"
-                      >
-                        <List className="h-3 w-3" />
-                        <span>Modify Outline</span>
+                        <MessageSquare className="h-3 w-3" />
+                        <span>Comment</span>
                       </button>
                     </div>
                   )}

@@ -10,7 +10,7 @@ import { Share2, ChevronLeft, LogOut } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import ShareDialog from "@/components/share/ShareDialog";
 import { LogoIcon } from "@/components/common/Logo";
-import { getUserColor } from "@/lib/getUserColor";
+import UserAvatar from "@/components/user/UserAvatar";
 import { useDocumentMembers } from "./hooks/useDocumentMembers";
 import { useBackup } from "./hooks/useBackup";
 import { useIntentBlockOperations } from "@/hooks/useIntentBlockOperations";
@@ -128,7 +128,6 @@ export default function RoomShell({
   // Get user display info
   const userAvatar = user.user_metadata?.avatar_url;
   const userName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || 'User';
-  const userInitials = userName.substring(0, 2).toUpperCase();
 
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
@@ -214,27 +213,14 @@ export default function RoomShell({
             {/* Other Online Users (excluding current user) */}
             {onlineUsers.filter(u => u.userId !== user.id).length > 0 && (
               <div className="flex -space-x-2">
-                {onlineUsers.filter(u => u.userId !== user.id).slice(0, 3).map((onlineUser) => {
-                  const initials = onlineUser.userName.substring(0, 2).toUpperCase();
-                  return (
-                    <div
+                {onlineUsers.filter(u => u.userId !== user.id).slice(0, 3).map((onlineUser) => (
+                    <UserAvatar
                       key={onlineUser.connectionId}
-                      className="h-7 w-7 rounded-full overflow-hidden flex items-center justify-center text-xs font-semibold text-white border-2 border-background"
-                      style={!onlineUser.avatarUrl ? { backgroundColor: getUserColor(onlineUser.userId) } : undefined}
-                      title={onlineUser.userName}
-                    >
-                      {onlineUser.avatarUrl ? (
-                        <img
-                          src={onlineUser.avatarUrl}
-                          alt={onlineUser.userName}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        initials
-                      )}
-                    </div>
-                  );
-                })}
+                      avatarUrl={onlineUser.avatarUrl}
+                      name={onlineUser.userName}
+                      className="h-7 w-7 border-2 border-background"
+                    />
+                ))}
                 {onlineUsers.filter(u => u.userId !== user.id).length > 3 && (
                   <div
                     className="h-7 w-7 rounded-full bg-muted flex items-center justify-center text-xs font-medium border-2 border-background"
@@ -248,20 +234,13 @@ export default function RoomShell({
 
             {/* Current User Avatar + Logout Dropdown */}
             <div className="relative group">
-              <button
-                className="h-8 w-8 rounded-full overflow-hidden flex items-center justify-center text-xs font-semibold text-white border-2 border-primary"
-                style={!userAvatar ? { backgroundColor: getUserColor(user.id) } : undefined}
-                title={userName}
-              >
-                {userAvatar ? (
-                  <img
-                    src={userAvatar}
-                    alt={userName}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  userInitials
-                )}
+              <button title={userName}>
+                <UserAvatar
+                  avatarUrl={userAvatar}
+                  name={userName}
+                  email={user.email}
+                  className="h-8 w-8 border-2 border-primary"
+                />
               </button>
               {/* Dropdown on hover */}
               <div className="absolute right-0 top-full mt-1 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">

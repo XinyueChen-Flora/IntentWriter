@@ -78,7 +78,7 @@ export default function TipTapEditor({
       process.env.NEXT_PUBLIC_PARTYKIT_HOST || "localhost:1999",
       `${roomId}-writing-${writingBlock.id}`,
       d,
-      { connect: true }
+      { connect: true, party: "main" }
     );
     return { doc: d, provider: p };
   // eslint-disable-next-line react-hooks/exhaustive-deps
