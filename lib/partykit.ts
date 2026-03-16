@@ -44,6 +44,7 @@ export type IntentBlock = {
   // For proposed changes - track discussion state
   proposalStatus?: 'pending' | 'approved' | 'rejected';
   proposalId?: string; // Links to proposals table in DB
+  proposedAction?: 'add' | 'modify' | 'remove'; // What kind of change is proposed
 };
 
 export type RoomMeta = {

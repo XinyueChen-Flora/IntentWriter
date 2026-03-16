@@ -38,10 +38,8 @@ export function ActionRequiredBar() {
   if (visibleActions.length === 0) return null;
 
   const handleClick = (action: PendingAction) => {
-    ctx.setViewingProposalId(action.proposalId);
-    // For negotiate types, render panel at source section (focus on "what's proposed")
-    ctx.setViewingProposalForSectionId(action.sourceSectionId);
-    ctx.setViewingProposalAffectedSectionId(action.affectedSectionId);
+    // Expand the thread on the source section
+    ctx.setExpandedThreadProposalId(action.proposalId);
 
     // Scroll to source section (where the proposal originates)
     setTimeout(() => {

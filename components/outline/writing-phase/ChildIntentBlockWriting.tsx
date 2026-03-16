@@ -76,8 +76,11 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
   // Highlight if this block is the trigger for an active proposal draft
   const isProposalTrigger = ctx.proposalDraft?.triggerIntentId === block.id;
 
+  const isProposed = block.changeStatus === 'proposed';
+
   const borderClass = (() => {
     if (isProposalTrigger) return "border-blue-500 dark:border-blue-400";
+    if (isProposed) return "border-dashed border-indigo-400 dark:border-indigo-500";
     if (block.changeStatus === 'removed') return "border-red-500 dark:border-red-600";
     if (isHoveredFromWriting || isHoveredFromSummary) {
       if (childCoverageStatus?.status === 'partial') return "border-amber-600";
@@ -93,6 +96,7 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
   })();
 
   const bgClass = (() => {
+    if (isProposed) return "bg-indigo-50/30 dark:bg-indigo-950/20";
     if (block.changeStatus === 'removed') return "bg-red-50/30 dark:bg-red-950/30";
     if (isHoveredFromWriting || isHoveredFromSummary) {
       if (childCoverageStatus?.status === 'partial') return "bg-amber-50/50 dark:bg-amber-950/40";
@@ -161,11 +165,18 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
           <div className="flex-1 min-w-0">
             <div
               className={`prose prose-sm max-w-none rounded px-1 py-0.5 ${
-                block.changeStatus === 'removed' ? 'line-through text-red-500 dark:text-red-400 opacity-70' : ''
+                block.changeStatus === 'removed' ? 'line-through text-red-500 dark:text-red-400 opacity-70' :
+                isProposed && block.proposedAction === 'remove' ? 'line-through text-indigo-400 dark:text-indigo-500 opacity-70' : ''
               }`}
             >
               {(block.changeStatus === 'proposed' || block.changeStatus === 'modified') && block.previousContent && block.previousContent !== block.content ? (
                 <WordDiff oldText={block.previousContent} newText={block.content} />
+              ) : isProposed && block.proposedAction === 'add' ? (
+                <span className="text-indigo-600 dark:text-indigo-400">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {block.content || "*empty*"}
+                  </ReactMarkdown>
+                </span>
               ) : (
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {block.content || "*empty*"}
@@ -180,14 +191,23 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      ctx.setViewingProposalId(block.proposalId!);
-                      ctx.setViewingProposalForSectionId(rootId);
-                      ctx.setViewingProposalAffectedSectionId(rootId);
+                      if (isProposed) {
+                        // Negotiate type: expand the thread on this section
+                        ctx.setExpandedThreadProposalId(
+                          ctx.expandedThreadProposalId === block.proposalId ? null : block.proposalId!
+                        );
+                      } else {
+                        // Decided type: open ProposalViewer panel
+                        ctx.setViewingProposalId(block.proposalId!);
+                        ctx.setViewingProposalForSectionId(rootId);
+                        ctx.setViewingProposalAffectedSectionId(rootId);
+                      }
                     }}
                     className="hover:opacity-80 transition-opacity"
                   >
                     <ChangeStatusBadge
                       status={block.changeStatus}
+                      proposedAction={block.proposedAction}
                       changeByAvatar={ctx.userAvatarMap.get(block.changeBy!)}
                       changeBy={block.changeByName}
                       changeAt={block.changeAt}

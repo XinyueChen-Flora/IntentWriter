@@ -9,6 +9,7 @@ import { CoverageIcon } from "../ui/CoverageIcons";
 import { InlineDiffView } from "@/components/simulate/InlineDiffView";
 import { ProposalPanel } from "@/components/simulate/ProposalPanel";
 import { ProposalViewer } from "@/components/simulate/ProposalViewer";
+import { PendingDecisionView } from "@/components/simulate/PendingDecisionView";
 import { SideBySideDiff } from "@/components/simulate/SideBySideDiff";
 import { AlignmentSummary, type AlignmentItem, type AlignmentStatus } from "../alignment";
 
@@ -24,6 +25,13 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
   const [highlightFilter, setHighlightFilter] = useState<AlignmentStatus | null>(null);
   const [loadingAlignmentItemId, setLoadingAlignmentItemId] = useState<string | null>(null);
   const [summaryHidden, setSummaryHidden] = useState(false);
+
+  // Check if there's an active pending proposal to show decision view
+  const pendingProposalId = ctx.expandedThreadProposalId;
+  // This section shows decision view if it's the source section of the expanded pending proposal
+  const showPendingDecision = !!pendingProposalId && children.some(
+    c => c.proposalId === pendingProposalId && c.changeStatus === 'proposed'
+  );
 
   // Drift detection status
   const isRootChecking = ctx.driftCheckingIds?.has(block.id);
@@ -470,8 +478,17 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
           </button>
         )}
 
-        {/* Normal editor */}
-        {matchedWritingBlock ? (
+        {/* Pending decision view — replaces editor when reviewing a pending proposal */}
+        {showPendingDecision && pendingProposalId && (
+          <PendingDecisionView
+            sectionId={block.id}
+            proposalId={pendingProposalId}
+            onDismiss={() => ctx.setExpandedThreadProposalId(null)}
+          />
+        )}
+
+        {/* Normal editor — hidden during pending decision */}
+        {!showPendingDecision && matchedWritingBlock ? (
           <TipTapEditor
             intent={block}
             writingBlock={matchedWritingBlock}
@@ -590,6 +607,7 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
             Loading editor...
           </div>
         )}
+
       </div>
 
       {/* Prose mode: AI simulation panel beside the editor */}

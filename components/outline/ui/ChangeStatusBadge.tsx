@@ -7,6 +7,7 @@ type ChangeStatus = 'added' | 'proposed' | 'modified' | 'removed';
 
 type ChangeStatusBadgeProps = {
   status: ChangeStatus;
+  proposedAction?: 'add' | 'modify' | 'remove';
   changeBy?: string;
   changeByAvatar?: string;
   changeAt?: number;
@@ -26,14 +27,21 @@ function relativeTime(ts: number) {
 const statusConfig = {
   added:    { Icon: Plus,  label: 'NEW',      style: 'text-emerald-600 dark:text-emerald-400' },
   modified: { Icon: Edit2, label: 'MODIFIED',  style: 'text-amber-600 dark:text-amber-400' },
-  proposed: { Icon: Edit2, label: 'CHANGES',   style: 'text-blue-600 dark:text-blue-400' },
+  proposed: { Icon: Edit2, label: 'PENDING',    style: 'text-indigo-600 dark:text-indigo-400' },
   removed:  { Icon: Minus, label: 'REMOVED',   style: 'text-red-500 dark:text-red-400' },
 } as const;
 
-export function ChangeStatusBadge({ status, changeBy, changeByAvatar, changeAt, compact }: ChangeStatusBadgeProps) {
+export function ChangeStatusBadge({ status, proposedAction, changeBy, changeByAvatar, changeAt, compact }: ChangeStatusBadgeProps) {
   const config = statusConfig[status];
   if (!config) return null;
-  const { Icon, label, style } = config;
+  const { Icon, style } = config;
+
+  // Override label for proposed based on action type
+  let label: string = config.label;
+  if (status === 'proposed' && proposedAction) {
+    const actionLabels: Record<string, string> = { add: 'PENDING ADD', modify: 'PENDING', remove: 'PENDING REMOVE' };
+    label = actionLabels[proposedAction] || label;
+  }
 
   if (compact) {
     return (

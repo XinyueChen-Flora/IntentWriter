@@ -237,6 +237,7 @@ export default function IntentPanel({
   const [viewingProposalId, setViewingProposalId] = useState<string | null>(null);
   const [viewingProposalForSectionId, setViewingProposalForSectionId] = useState<string | null>(null);
   const [viewingProposalAffectedSectionId, setViewingProposalAffectedSectionId] = useState<string | null>(null);
+  const [expandedThreadProposalId, setExpandedThreadProposalId] = useState<string | null>(null);
 
   // ─── Proposals & section notifications ───
   type ProposalRecord = {
@@ -925,6 +926,8 @@ export default function IntentPanel({
     setViewingProposalAffectedSectionId,
     getSectionNotifications,
     refreshProposals,
+    expandedThreadProposalId,
+    setExpandedThreadProposalId,
   }), [
     blockMap, collapsedBlocks, editingBlock, hoveredBlock, selectedBlockId,
     dragDrop.dragOverId, dragDrop.activeId, isSetupPhase, activeSetupTab,
@@ -943,6 +946,7 @@ export default function IntentPanel({
     proposalDraft, openProposalDraft,
     viewingProposalId, viewingProposalForSectionId, viewingProposalAffectedSectionId,
     getSectionNotifications, refreshProposals,
+    expandedThreadProposalId,
   ]);
 
   return (

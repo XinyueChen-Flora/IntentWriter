@@ -261,6 +261,9 @@ export type IntentPanelContextValue = {
   // Section notifications — pending impacts from other people's changes
   getSectionNotifications: (sectionId: string) => SectionNotification[];
   refreshProposals: () => void;
+  // Thread expansion — which proposal thread is expanded
+  expandedThreadProposalId: string | null;
+  setExpandedThreadProposalId: (id: string | null) => void;
 };
 
 const IntentPanelContext = createContext<IntentPanelContextValue | null>(null);

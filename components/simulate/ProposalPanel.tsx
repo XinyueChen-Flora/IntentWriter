@@ -298,41 +298,56 @@ export function ProposalPanel({ rootBlock, currentChildren, onClose }: ProposalP
         const { proposal } = await res.json();
         const proposalId = proposal?.id;
 
-        // Apply proposed changes to real intent blocks via PartyKit
-        // Only apply immediately for 'decided' — negotiate types wait for vote resolution
-        const shouldApplyNow = proposeType === 'decided' || !proposeType;
-        for (const change of shouldApplyNow ? sourceChanges : []) {
+        // Apply changes to intent blocks via PartyKit
+        const isNegotiateType = proposeType === 'negotiate' || proposeType === 'input' || proposeType === 'discussion';
+        const changeBy = ctx.currentUser?.id;
+        const changeByName = ctx.currentUser?.user_metadata?.display_name || ctx.currentUser?.email?.split('@')[0];
+        const changeAt = Date.now();
+
+        for (const change of sourceChanges) {
+          const existingBlock = currentChildren.find(c => c.id === change.id);
+          // Only show 'proposed' (PENDING) for blocks with no prior change.
+          // Blocks already modified/added/removed keep their existing status.
+          const hasExistingChange = existingBlock?.changeStatus && existingBlock.changeStatus !== 'proposed';
+
           if (change.status === 'modified') {
             ctx.updateIntentBlockRaw(change.id, {
-              changeStatus: 'modified',
+              changeStatus: isNegotiateType
+                ? (hasExistingChange ? existingBlock!.changeStatus : 'proposed')
+                : 'modified',
+              proposedAction: isNegotiateType ? 'modify' : undefined,
               proposalStatus: 'pending',
               proposalId,
-              previousContent: currentChildren.find(c => c.id === change.id)?.content,
+              previousContent: existingBlock?.content,
               content: change.content,
-              changeBy: ctx.currentUser?.id,
-              changeByName: ctx.currentUser?.user_metadata?.display_name || ctx.currentUser?.email?.split('@')[0],
-              changeAt: Date.now(),
+              changeBy,
+              changeByName,
+              changeAt,
             });
           } else if (change.status === 'removed') {
             ctx.updateIntentBlockRaw(change.id, {
-              changeStatus: 'removed',
+              changeStatus: isNegotiateType
+                ? (hasExistingChange ? existingBlock!.changeStatus : 'proposed')
+                : 'removed',
+              proposedAction: isNegotiateType ? 'remove' : undefined,
               proposalStatus: 'pending',
               proposalId,
-              changeBy: ctx.currentUser?.id,
-              changeByName: ctx.currentUser?.user_metadata?.display_name || ctx.currentUser?.email?.split('@')[0],
-              changeAt: Date.now(),
+              changeBy,
+              changeByName,
+              changeAt,
             });
           } else if (change.status === 'new') {
-            // Add new intent block as proposed
+            // New blocks are always truly new — always show PENDING
             const newBlock = ctx.addBlock({ asChildOf: rootBlock.id });
             ctx.updateIntentBlockRaw(newBlock.id, {
               content: change.content,
-              changeStatus: 'added',
+              changeStatus: isNegotiateType ? 'proposed' : 'added',
+              proposedAction: isNegotiateType ? 'add' : undefined,
               proposalStatus: 'pending',
               proposalId,
-              changeBy: ctx.currentUser?.id,
-              changeByName: ctx.currentUser?.user_metadata?.display_name || ctx.currentUser?.email?.split('@')[0],
-              changeAt: Date.now(),
+              changeBy,
+              changeByName,
+              changeAt,
             });
           }
         }
