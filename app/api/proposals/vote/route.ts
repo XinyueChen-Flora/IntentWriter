@@ -2,6 +2,8 @@
 
 import { NextResponse } from "next/server";
 import { requireAuth, isErrorResponse, withErrorHandler } from "@/lib/api/middleware";
+import { checkResolution as engineCheckResolution } from "@/platform/coordination/engine";
+import "@/platform/coordination/builtin"; // ensure paths are registered
 
 // POST /api/proposals/vote — cast or update a vote
 export const POST = withErrorHandler(async (request: Request) => {
@@ -11,10 +13,9 @@ export const POST = withErrorHandler(async (request: Request) => {
 
   const { proposalId, vote, comment } = await request.json();
 
-  const validVotes = ["approve", "reject", "acknowledge", "escalate", "response"];
-  if (!proposalId || !vote || !validVotes.includes(vote)) {
+  if (!proposalId || !vote) {
     return NextResponse.json(
-      { error: `Missing required fields: proposalId, vote (${validVotes.join("|")})` },
+      { error: "Missing required fields: proposalId, vote" },
       { status: 400 }
     );
   }
@@ -22,7 +23,7 @@ export const POST = withErrorHandler(async (request: Request) => {
   // Fetch full proposal (need propose_type, negotiate_rules, notify_user_ids for resolution)
   const { data: proposal, error: fetchError } = await supabase
     .from("proposals")
-    .select("id, status, propose_type, negotiate_rules, notify_user_ids, proposed_by")
+    .select("id, status, propose_type, negotiate_rules, path_config, notify_user_ids, proposed_by")
     .eq("id", proposalId)
     .single();
 
@@ -55,7 +56,7 @@ export const POST = withErrorHandler(async (request: Request) => {
     return NextResponse.json({ error: "Failed to cast vote" }, { status: 500 });
   }
 
-  // ─── Check if proposal should auto-resolve ───
+  // ─── Check if proposal should auto-resolve via coordination engine ───
   const resolution = await checkResolution(supabase, proposal);
 
   if (resolution) {
@@ -78,7 +79,7 @@ export const POST = withErrorHandler(async (request: Request) => {
   return NextResponse.json({ vote: voteData });
 });
 
-// Check vote threshold and determine if proposal should resolve
+// Delegate resolution to the coordination engine
 async function checkResolution(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any,
@@ -86,60 +87,40 @@ async function checkResolution(
     id: string;
     propose_type: string;
     negotiate_rules: { voteThreshold?: string; discussionResolution?: string } | null;
+    path_config: Record<string, unknown> | null;
     notify_user_ids: string[];
     proposed_by: string;
   }
 ): Promise<'approved' | 'rejected' | null> {
-  const proposeType = proposal.propose_type;
+  const pathId = proposal.propose_type;
 
-  // Input type: first approve/reject from assignee resolves it
-  if (proposeType === 'input') {
-    const { data: votes } = await supabase
-      .from("proposal_votes")
-      .select("vote")
-      .eq("proposal_id", proposal.id)
-      .in("vote", ["approve", "reject"]);
+  // Build path config: prefer path_config (v2), fall back to negotiate_rules (v1)
+  const pathConfig: Record<string, unknown> = proposal.path_config
+    ?? proposal.negotiate_rules
+    ?? {};
 
-    if (votes && votes.length > 0) {
-      return votes[0].vote === 'approve' ? 'approved' : 'rejected';
-    }
-    return null;
-  }
+  // Voters = everyone in notify_user_ids (not the proposer)
+  const voterIds = (proposal.notify_user_ids || []).filter(
+    (id: string) => id !== proposal.proposed_by
+  );
+  const eligibleCount = voterIds.length;
+  if (eligibleCount === 0 && pathId !== 'decided') return null;
 
-  // Negotiate (vote) type: check threshold
-  if (proposeType === 'negotiate') {
-    const threshold = proposal.negotiate_rules?.voteThreshold || 'majority';
-    // Voters = everyone in notify_user_ids (not the proposer)
-    const voterIds = (proposal.notify_user_ids || []).filter((id: string) => id !== proposal.proposed_by);
-    const totalVoters = voterIds.length;
-    if (totalVoters === 0) return null;
+  // Fetch all votes for this proposal from eligible voters
+  const { data: votes } = await supabase
+    .from("proposal_votes")
+    .select("user_id, vote")
+    .eq("proposal_id", proposal.id)
+    .in("user_id", voterIds);
 
-    const { data: votes } = await supabase
-      .from("proposal_votes")
-      .select("user_id, vote")
-      .eq("proposal_id", proposal.id)
-      .in("user_id", voterIds);
+  if (!votes) return null;
 
-    if (!votes) return null;
+  // Map DB votes to engine format
+  const voteRecords = votes.map((v: { user_id: string; vote: string }) => ({
+    userId: v.user_id,
+    action: v.vote,
+  }));
 
-    const approves = votes.filter((v: { vote: string }) => v.vote === 'approve').length;
-    const rejects = votes.filter((v: { vote: string }) => v.vote === 'reject').length;
-
-    if (threshold === 'any') {
-      if (approves >= 1) return 'approved';
-      if (rejects >= 1) return 'rejected';
-    } else if (threshold === 'majority') {
-      const needed = Math.ceil(totalVoters / 2);
-      if (approves >= needed) return 'approved';
-      if (rejects >= needed) return 'rejected';
-    } else if (threshold === 'all') {
-      if (approves === totalVoters) return 'approved';
-      if (rejects >= 1) return 'rejected'; // any reject blocks unanimous
-    }
-
-    return null;
-  }
-
-  // Discussion type: no auto-resolve (proposer resolves manually)
-  return null;
+  // Delegate to the coordination engine — reads the path definition from registry
+  return engineCheckResolution(pathId, pathConfig, voteRecords, eligibleCount);
 }

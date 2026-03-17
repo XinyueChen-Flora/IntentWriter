@@ -4,6 +4,7 @@ import { createContext, useContext } from "react";
 import type { IntentBlock, WritingBlock, IntentDependency } from "@/lib/partykit";
 import type { DocumentMember } from "@/lib/types";
 import type { User } from "@supabase/supabase-js";
+import type { MetaRuleConfig } from "@/lib/metarule-types";
 import type { DriftStatus, OrphanSentence, DependencyIssue, SentenceAnchor, SupportingSentence, SimulatedOutline, AlignedIntent } from "@/hooks/useDriftDetection";
 
 // Writing simulation info (where and what to insert)
@@ -194,6 +195,7 @@ export type IntentPanelContextValue = {
   updateIntentBlockRaw: (blockId: string, updates: Partial<IntentBlock>) => void;
   onRegisterYjsExporter?: (blockId: string, exporter: () => Uint8Array) => void;
   onRegisterMarkdownExporter?: (blockId: string, exporter: () => Promise<string>) => void;
+  onRegisterParagraphAttributionExporter?: (blockId: string, exporter: () => import("@/platform/data-model").ParagraphAttribution[]) => void;
   // Drift detection
   driftCheckingIds?: Set<string>;
   triggerCheck?: (sectionId?: string) => Promise<void>;
@@ -264,6 +266,8 @@ export type IntentPanelContextValue = {
   // Thread expansion — which proposal thread is expanded
   expandedThreadProposalId: string | null;
   setExpandedThreadProposalId: (id: string | null) => void;
+  // MetaRule — team's governance pipeline configuration
+  metaRule?: MetaRuleConfig;
 };
 
 const IntentPanelContext = createContext<IntentPanelContextValue | null>(null);

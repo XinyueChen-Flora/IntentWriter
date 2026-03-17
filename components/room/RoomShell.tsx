@@ -4,16 +4,19 @@ import { useRouter } from "next/navigation";
 import { useRoom } from "@/lib/partykit";
 import type { User } from "@supabase/supabase-js";
 import IntentPanel from "../outline/IntentPanel";
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { Share2, ChevronLeft, LogOut } from "lucide-react";
+import { Share2, LogOut } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import ShareDialog from "@/components/share/ShareDialog";
+import MetaRuleBuilder from "@/components/settings/MetaRuleBuilder";
+import type { MetaRuleConfig } from "@/lib/metarule-types";
 import { LogoIcon } from "@/components/common/Logo";
 import UserAvatar from "@/components/user/UserAvatar";
 import { useDocumentMembers } from "./hooks/useDocumentMembers";
-import { useBackup } from "./hooks/useBackup";
 import { useIntentBlockOperations } from "@/hooks/useIntentBlockOperations";
+import type { ParagraphAttribution } from "@/platform/data-model";
+import { useOutlineVersioning, useWritingSnapshots } from "@/hooks/useDataPersistence";
 
 type RoomShellProps = {
   roomId: string;
@@ -29,6 +32,7 @@ export default function RoomShell({
   const router = useRouter();
   const [selectedIntentBlockId, setSelectedIntentBlockId] = useState<string | null>(null);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [activeView, setActiveView] = useState<'outline' | 'rules' | 'writing'>('outline');
 
   const { documentMembers, isOwner } = useDocumentMembers(roomId, user.id);
 
@@ -52,8 +56,6 @@ export default function RoomShell({
   const roomMeta = state.roomMeta;
   const dependencies = state.dependencies;
 
-  const backup = useBackup({ roomId, intentBlocks, writingBlocks, isConnected });
-
   // Markdown exporter registry for drift detection
   const markdownExportersRef = useRef<Map<string, () => Promise<string>>>(new Map());
   const [markdownExportersVersion, setMarkdownExportersVersion] = useState(0);
@@ -61,6 +63,13 @@ export default function RoomShell({
   const handleRegisterMarkdownExporter = useCallback((blockId: string, exporter: () => Promise<string>) => {
     markdownExportersRef.current.set(blockId, exporter);
     setMarkdownExportersVersion(v => v + 1);
+  }, []);
+
+  // Paragraph attribution exporter registry
+  const paragraphAttributionExportersRef = useRef<Map<string, () => ParagraphAttribution[]>>(new Map());
+
+  const handleRegisterParagraphAttributionExporter = useCallback((blockId: string, exporter: () => ParagraphAttribution[]) => {
+    paragraphAttributionExportersRef.current.set(blockId, exporter);
   }, []);
 
   const ops = useIntentBlockOperations({
@@ -72,6 +81,43 @@ export default function RoomShell({
     deleteIntentBlockRaw,
     addWritingBlockRaw,
     deleteWritingBlockRaw,
+  });
+
+  // ─── Data persistence ───
+
+  // Outline versioning: debounced save after structural changes
+  const { saveVersion } = useOutlineVersioning({
+    documentId: roomId,
+    intentBlocks,
+    dependencies,
+    isActive: isConnected,
+  });
+
+  // Writing snapshots: periodic markdown export to DB
+  const intentToWritingMap = useMemo(() => {
+    const map = new Map<string, { id: string }>();
+    writingBlocks.forEach((wb) => {
+      if (wb.linkedIntentId && !map.has(wb.linkedIntentId)) {
+        map.set(wb.linkedIntentId, { id: wb.id });
+      }
+    });
+    return map;
+  }, [writingBlocks]);
+
+  const rootBlocks = useMemo(
+    () => intentBlocks.filter(b => b.parentId === null),
+    [intentBlocks]
+  );
+
+  useWritingSnapshots({
+    documentId: roomId,
+    markdownExporters: markdownExportersRef.current,
+    paragraphAttributionExporters: paragraphAttributionExportersRef.current,
+    intentToWritingMap,
+    rootBlocks,
+    currentUserId: user.id,
+    currentUserName: user.user_metadata?.name || user.user_metadata?.full_name || user.email?.split('@')[0],
+    isActive: isConnected && roomMeta?.phase === 'writing',
   });
 
   // Handle transition from setup to writing phase
@@ -95,6 +141,10 @@ export default function RoomShell({
 
       const result = await response.json();
       const userName = user.user_metadata?.name || user.user_metadata?.full_name || user.email?.split('@')[0] || 'Unknown';
+
+      // Save outline version at phase transition
+      await saveVersion('phase-transition');
+
       updateRoomMeta({
         phase: 'writing',
         baselineVersion: result.version || (roomMeta?.baselineVersion || 0) + 1,
@@ -117,6 +167,14 @@ export default function RoomShell({
   }, [user, updateRoomMeta]);
 
   const isWritingPhase = roomMeta?.phase === 'writing';
+
+  // Sync activeView with room phase
+  // When phase transitions to writing, switch to writing view
+  // When phase transitions to setup, switch to outline view
+  const effectiveView = isWritingPhase && activeView === 'outline' ? 'writing' :
+                         !isWritingPhase && activeView === 'writing' ? 'outline' :
+                         activeView;
+
   const supabase = createClient();
 
   const handleSignOut = async () => {
@@ -124,6 +182,13 @@ export default function RoomShell({
     router.push("/");
     router.refresh();
   };
+
+  const handleSaveMetaRule = useCallback(
+    (config: MetaRuleConfig) => {
+      updateRoomMeta({ metaRule: config });
+    },
+    [updateRoomMeta]
+  );
 
   // Get user display info
   const userAvatar = user.user_metadata?.avatar_url;
@@ -153,9 +218,10 @@ export default function RoomShell({
                 if (isWritingPhase && confirm('Go back to outline? Writing editors will be hidden but your content is preserved.')) {
                   handleBackToSetup();
                 }
+                setActiveView('outline');
               }}
               className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-sm transition-colors ${
-                !isWritingPhase
+                effectiveView === 'outline'
                   ? 'bg-primary text-primary-foreground'
                   : 'bg-muted text-muted-foreground hover:bg-muted/80 cursor-pointer'
               }`}
@@ -164,14 +230,34 @@ export default function RoomShell({
               <span>Outline</span>
             </button>
             <div className="w-8 h-px bg-border" />
-            <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-sm ${
-              isWritingPhase
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-muted text-muted-foreground'
-            }`}>
+            <button
+              onClick={() => setActiveView('rules')}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-sm transition-colors ${
+                effectiveView === 'rules'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-muted/80 cursor-pointer'
+              }`}
+            >
               <span className="font-medium">2</span>
+              <span>Rules</span>
+            </button>
+            <div className="w-8 h-px bg-border" />
+            <button
+              onClick={() => {
+                if (!isWritingPhase) {
+                  handleStartWriting();
+                }
+                setActiveView('writing');
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-sm transition-colors ${
+                effectiveView === 'writing'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-muted/80 cursor-pointer'
+              }`}
+            >
+              <span className="font-medium">3</span>
               <span>Writing</span>
-            </div>
+            </button>
           </div>
 
           {/* Right: Actions + Online Users + User Avatar */}
@@ -193,19 +279,6 @@ export default function RoomShell({
               <Share2 className="h-4 w-4 mr-1" />
               Share
             </Button>
-
-            {/* Save button - only in Writing phase */}
-            {isWritingPhase && (
-              <Button
-                variant={backup.shouldRemindBackup ? "default" : "ghost"}
-                size="sm"
-                onClick={backup.backupToSupabase}
-                disabled={backup.isBackingUp || !isConnected}
-                title="Save document"
-              >
-                {backup.isBackingUp ? "Saving..." : "Save"}
-              </Button>
-            )}
 
             {/* Separator */}
             <div className="h-6 w-px bg-border" />
@@ -264,38 +337,47 @@ export default function RoomShell({
       </header>
 
       <div className="flex-1 overflow-hidden">
-        <IntentPanel
-          blocks={intentBlocks}
-          addBlock={ops.addIntentBlock}
-          updateBlock={ops.updateIntentBlock}
-          assignBlock={ops.assignBlock}
-          unassignBlock={ops.unassignBlock}
-          deleteBlock={ops.deleteIntentBlock}
-          indentBlock={ops.indentBlock}
-          outdentBlock={ops.outdentBlock}
-          reorderBlocks={ops.reorderBlocks}
-          selectedBlockId={selectedIntentBlockId}
-          setSelectedBlockId={setSelectedIntentBlockId}
-          writingBlocks={writingBlocks}
-          importMarkdown={ops.importMarkdownIntents}
-          currentUser={user}
-          onlineUsers={onlineUsers}
-          documentMembers={documentMembers}
-          roomId={roomId}
-          deleteWritingBlock={ops.deleteWritingBlock}
-          updateIntentBlockRaw={updateIntentBlockRaw}
-          onRegisterYjsExporter={backup.handleRegisterYjsExporter}
-          markdownExporters={markdownExportersRef.current}
-          onRegisterMarkdownExporter={handleRegisterMarkdownExporter}
-          ensureWritingBlocksForIntents={ops.ensureWritingBlocksForIntents}
-          roomMeta={roomMeta}
-          dependencies={dependencies}
-          addDependency={addDependency}
-          updateDependency={updateDependency}
-          deleteDependency={deleteDependency}
-          onStartWriting={handleStartWriting}
-          onBackToSetup={handleBackToSetup}
-        />
+        {effectiveView === 'rules' ? (
+          <MetaRuleBuilder
+            initialConfig={roomMeta?.metaRule}
+            onSave={handleSaveMetaRule}
+            onCancel={() => setActiveView(isWritingPhase ? 'writing' : 'outline')}
+          />
+        ) : (
+          <IntentPanel
+            blocks={intentBlocks}
+            addBlock={ops.addIntentBlock}
+            updateBlock={ops.updateIntentBlock}
+            assignBlock={ops.assignBlock}
+            unassignBlock={ops.unassignBlock}
+            deleteBlock={ops.deleteIntentBlock}
+            indentBlock={ops.indentBlock}
+            outdentBlock={ops.outdentBlock}
+            reorderBlocks={ops.reorderBlocks}
+            selectedBlockId={selectedIntentBlockId}
+            setSelectedBlockId={setSelectedIntentBlockId}
+            writingBlocks={writingBlocks}
+            importMarkdown={ops.importMarkdownIntents}
+            currentUser={user}
+            onlineUsers={onlineUsers}
+            documentMembers={documentMembers}
+            roomId={roomId}
+            deleteWritingBlock={ops.deleteWritingBlock}
+            updateIntentBlockRaw={updateIntentBlockRaw}
+            onRegisterYjsExporter={undefined}
+            onRegisterParagraphAttributionExporter={handleRegisterParagraphAttributionExporter}
+            markdownExporters={markdownExportersRef.current}
+            onRegisterMarkdownExporter={handleRegisterMarkdownExporter}
+            ensureWritingBlocksForIntents={ops.ensureWritingBlocksForIntents}
+            roomMeta={roomMeta}
+            dependencies={dependencies}
+            addDependency={addDependency}
+            updateDependency={updateDependency}
+            deleteDependency={deleteDependency}
+            onStartWriting={handleStartWriting}
+            onBackToSetup={handleBackToSetup}
+          />
+        )}
       </div>
 
       <ShareDialog
@@ -304,6 +386,7 @@ export default function RoomShell({
         documentId={roomId}
         isOwner={isOwner}
       />
+
     </div>
   );
 }

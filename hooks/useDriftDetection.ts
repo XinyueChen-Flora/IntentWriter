@@ -1,7 +1,10 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import type { IntentBlock, IntentDependency } from "@/lib/partykit";
+import type { MetaRuleConfig } from "@/lib/metarule-types";
+import { runFunction } from "@/platform/functions/runner";
+import "@/platform/functions/builtin"; // ensure functions are registered
 
 // ============================================
 // UNIFIED TYPES (matching API)
@@ -73,6 +76,10 @@ export type UseDriftDetectionProps = {
   dependencies?: IntentDependency[];
   markdownExporters: Map<string, () => Promise<string>>;
   intentToWritingMap: Map<string, { id: string }>;
+  /** MetaRule config — drives auto-detection trigger */
+  metaRule?: MetaRuleConfig;
+  /** Is the room in writing phase? Auto-detection only runs during writing */
+  isWritingPhase?: boolean;
 };
 
 // Sentence highlight for writing side (new unified format)
@@ -160,6 +167,8 @@ export function useDriftDetection({
   dependencies,
   markdownExporters,
   intentToWritingMap,
+  metaRule,
+  isWritingPhase,
 }: UseDriftDetectionProps): UseDriftDetectionResult {
   const [driftMap, setDriftMap] = useState<Map<string, DriftStatus>>(new Map());
   const [checkingIds, setCheckingIds] = useState<Set<string>>(new Set());
@@ -294,29 +303,20 @@ export function useDriftDetection({
         }
       }
 
-      // Call API
-      const response = await fetch('/api/check-drift', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          section: {
-            intentId: rootIntentId,
-            intentContent: rootBlock.content,
-            childIntents,
-            writingMarkdown,
-          },
-          relatedSections,
-        }),
+      // Call via function runner (reads endpoint from registry)
+      const capResult = await runFunction('check-drift', {
+        section: {
+          intentId: rootIntentId,
+          intentContent: rootBlock.content,
+          childIntents,
+          writingMarkdown,
+        },
+        relatedSections,
       });
 
-      if (!response.ok) {
-        console.error('Check drift API failed:', response.status);
-        return;
-      }
-
-      const data = await response.json();
-      if (data.result) {
-        const alignedIntents: AlignedIntent[] = data.result.alignedIntents || [];
+      if (capResult.data) {
+        const result = capResult.data as Record<string, unknown>;
+        const alignedIntents: AlignedIntent[] = (result.alignedIntents as AlignedIntent[]) || [];
 
         // Derive old-format intentCoverage from alignedIntents
         const intentCoverage: IntentCoverageItem[] = alignedIntents
@@ -339,7 +339,7 @@ export function useDriftDetection({
           })));
 
         const status: DriftStatus = {
-          ...data.result,
+          ...(result as Omit<DriftStatus, 'alignedIntents' | 'intentCoverage' | 'orphanSentences' | 'checkedAt'>),
           alignedIntents,
           intentCoverage,
           orphanSentences,
@@ -367,6 +367,40 @@ export function useDriftDetection({
       await Promise.all(rootBlocks.map(b => checkSection(b.id)));
     }
   }, [checkSection, rootBlocks]);
+
+  // ─── Auto-detection (driven by MetaRule config) ───
+  const autoCheckRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    // Clear any existing interval
+    if (autoCheckRef.current) {
+      clearInterval(autoCheckRef.current);
+      autoCheckRef.current = null;
+    }
+
+    const driftCheck = metaRule?.detection?.checks?.find(c => c.type === 'drift');
+    if (!driftCheck || driftCheck.trigger !== 'auto' || !isWritingPhase) return;
+
+    // Only support 'per-minute' auto frequency for now
+    if (driftCheck.autoFrequency === 'per-minute') {
+      const intervalMs = (driftCheck.autoIntervalMinutes ?? 5) * 60 * 1000;
+      autoCheckRef.current = setInterval(() => {
+        // Check all sections that have writing content
+        rootBlocks.forEach(b => {
+          if (intentToWritingMap.has(b.id) && markdownExporters.has(intentToWritingMap.get(b.id)!.id)) {
+            checkSection(b.id);
+          }
+        });
+      }, intervalMs);
+    }
+
+    return () => {
+      if (autoCheckRef.current) {
+        clearInterval(autoCheckRef.current);
+        autoCheckRef.current = null;
+      }
+    };
+  }, [metaRule, isWritingPhase, rootBlocks, intentToWritingMap, markdownExporters, checkSection]);
 
   // Get drift status for a section
   const getDriftStatus = useCallback((rootIntentId: string): DriftStatus | undefined => {

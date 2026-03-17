@@ -384,6 +384,21 @@ export function RootIntentBlock({ block, rootIndex }: RootIntentBlockProps) {
 
           {/* Render children */}
           {renderChildren()}
+
+          {/* Add child button — setup phase only */}
+          {ctx.isSetupPhase && !isCollapsed && (
+            <button
+              onClick={() => {
+                const newBlock = ctx.addBlock({ asChildOf: block.id });
+                ctx.setSelectedBlockId(newBlock.id);
+                setTimeout(() => ctx.setEditingBlock(newBlock.id), 50);
+              }}
+              className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors pl-4 py-1 opacity-0 group-hover:opacity-100"
+            >
+              <Plus className="h-3 w-3" />
+              <span>Add sub-intent</span>
+            </button>
+          )}
         </div>
 
         {/* Connector between outline and writing */}

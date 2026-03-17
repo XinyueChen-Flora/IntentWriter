@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { X, Plus, Trash2, RotateCcw, ArrowRight, Pencil, Minus, Loader2, MessageSquare, Edit2, Send, Bell, Users, Vote, UserCheck, MessagesSquare } from "lucide-react";
+import { X, Plus, Trash2, RotateCcw, ArrowRight, Pencil, Minus, Loader2, MessageSquare, Edit2, Send, UserCheck, Users } from "lucide-react";
+import { getPathUI, getAllPathUIs } from "@/platform/coordination/ui";
 import type { IntentBlock } from "@/lib/partykit";
 import type { DraftItem } from "../outline/IntentPanelContext";
 import { useIntentPanelContext } from "../outline/IntentPanelContext";
@@ -10,6 +11,8 @@ import { WordDiff } from "./WordDiff";
 import { ChangeStatusBadge } from "../outline/ui/ChangeStatusBadge";
 import { InformPanel } from "./InformPanel";
 import type { NotifyLevel, ImpactedSection } from "./InformPanel";
+import { resolveCoordinationPath, shouldBypassGate, DEFAULT_METARULE_CONFIG } from "@/lib/metarule-types";
+import type { MetaRuleConfig, ImpactLevel } from "@/lib/metarule-types";
 
 type ProposeType = 'decided' | 'negotiate' | 'input' | 'discussion';
 
@@ -34,6 +37,10 @@ type ProposalPanelProps = {
 export function ProposalPanel({ rootBlock, currentChildren, onClose }: ProposalPanelProps) {
   const ctx = useIntentPanelContext();
   const draft = ctx.proposalDraft;
+
+  // ─── MetaRule config (team's configured pipeline) ───
+  const metaRule: MetaRuleConfig = ctx.metaRule ?? DEFAULT_METARULE_CONFIG;
+
   // Propose step state
   const [proposeType, setProposeType] = useState<ProposeType | null>(null);
   const [reasoning, setReasoning] = useState('');
@@ -43,10 +50,10 @@ export function ProposalPanel({ rootBlock, currentChildren, onClose }: ProposalP
   // Per-person notification level for Inform mode
   const [notifyLevels, setNotifyLevels] = useState<Map<string, NotifyLevel>>(new Map());
   const [personalNotes, setPersonalNotes] = useState<Map<string, string>>(new Map());
-  // Negotiate rules
+  // Negotiate rules — initialized from MetaRule config
   const [negotiateRules, setNegotiateRules] = useState<NegotiateRules>({
-    voteThreshold: 'majority',
-    discussionResolution: 'proposer',
+    voteThreshold: metaRule.coordination.negotiate.voteThreshold,
+    discussionResolution: metaRule.coordination.discussion.closedBy,
   });
   // Snapshot of draft items at the time of last simulation, for stale detection
   const [simulatedSnapshot, setSimulatedSnapshot] = useState<string | null>(null);
@@ -83,6 +90,29 @@ export function ProposalPanel({ rootBlock, currentChildren, onClose }: ProposalP
 
     return sections;
   }, [ctx.activeDiffSession, ctx.blocks, ctx.documentMembers, ctx.currentUser.id]);
+
+  // ─── MetaRule-derived coordination defaults ───
+  const maxImpactLevel: ImpactLevel = useMemo(() => {
+    if (impactedSections.some(s => s.impactLevel === 'significant')) return 'significant';
+    if (impactedSections.some(s => s.impactLevel === 'minor')) return 'minor';
+    return 'none';
+  }, [impactedSections]);
+
+  const hasCrossSectionImpact = impactedSections.length > 0;
+  const isOwner = rootBlock.assignee === ctx.currentUser.id;
+
+  // Gate bypass: can this change skip coordination entirely?
+  const canBypassGate = shouldBypassGate(metaRule, maxImpactLevel, hasCrossSectionImpact, isOwner);
+
+  // Default coordination path from routing rules
+  const defaultPath = resolveCoordinationPath(
+    metaRule,
+    maxImpactLevel,
+    hasCrossSectionImpact ? 'cross-section' : 'same-section'
+  );
+
+  // Default notify level from MetaRule
+  const defaultNotifyLevel = metaRule.coordination.decided.defaultNotifyLevel;
 
   const toggleNotify = (userId: string) => {
     setExcludedUserIds(prev => {
@@ -493,59 +523,24 @@ export function ProposalPanel({ rootBlock, currentChildren, onClose }: ProposalP
 
             {/* ─── What's next? — inline below draft items ─── */}
             {simulationDone && !isProposed && !showProposeStep && (
-              <div className="mt-3 pt-2.5 border-t mx-0.5">
-                <div className="text-xs font-medium text-foreground mb-2 px-0.5">What&apos;s next?</div>
-
-                {/* Share with Team options */}
-                <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1 px-0.5">
-                  Share with team
-                </div>
-                <div className="space-y-1 mb-2.5">
-                  <button
-                    onClick={() => {
-                      // Smart defaults per section: significant → notify, minor → heads-up
-                      const levels = new Map<string, NotifyLevel>();
-                      const notes = new Map<string, string>();
-                      impactedSections.forEach(s => {
-                        if (s.impactLevel === 'significant') {
-                          levels.set(s.sectionId, 'notify');
-                          if (s.reason) notes.set(s.sectionId, s.reason);
-                        } else {
-                          levels.set(s.sectionId, 'heads-up');
-                        }
-                      });
-                      setNotifyLevels(levels);
-                      setPersonalNotes(notes);
-                      setProposeType('decided');
-                    }}
-                    className="w-full flex items-start gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors border hover:bg-muted hover:border-primary/30"
-                  >
-                    <Bell className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-medium">Inform</span>
-                      <span className="text-muted-foreground"> — I&apos;ve decided, letting the team know</span>
-                    </div>
-                  </button>
-                  <NegotiateSubOptions onSelect={setProposeType} />
-                </div>
-
-                {/* Self-resolve option */}
-                <div className="border-t pt-2">
-                  <button
-                    onClick={() => {
-                      ctx.setActiveDiffSession(null);
-                      onClose();
-                    }}
-                    className="w-full flex items-start gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground"
-                  >
-                    <Edit2 className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-medium">I&apos;ll adjust my writing</span>
-                      <span> — No outline change needed, I&apos;ll align my writing instead</span>
-                    </div>
-                  </button>
-                </div>
-              </div>
+              <WhatNextSection
+                canBypassGate={canBypassGate}
+                hasCrossSectionImpact={hasCrossSectionImpact}
+                maxImpactLevel={maxImpactLevel}
+                defaultPath={defaultPath}
+                defaultNotifyLevel={defaultNotifyLevel}
+                allowOverride={metaRule.allowOverride}
+                impactedSections={impactedSections}
+                negotiateRules={negotiateRules}
+                onSetProposeType={setProposeType}
+                onSetReasoning={setReasoning}
+                onSetNotifyLevels={setNotifyLevels}
+                onSetPersonalNotes={setPersonalNotes}
+                onSelfResolve={() => {
+                  ctx.setActiveDiffSession(null);
+                  onClose();
+                }}
+              />
             )}
 
             {/* ─── Inform flow ─── */}
@@ -696,11 +691,7 @@ export function ProposalPanel({ rootBlock, currentChildren, onClose }: ProposalP
             ) : (
               <Send className="h-3 w-3" />
             )}
-            {isSubmitting ? 'Submitting...' : proposeType === 'decided' ? 'Share'
-              : proposeType === 'negotiate' ? 'Request Vote'
-              : proposeType === 'input' ? 'Ask for Input'
-              : proposeType === 'discussion' ? 'Start Discussion'
-              : 'Submit'}
+            {isSubmitting ? 'Submitting...' : getPathUI(proposeType)?.ctaLabel ? `${getPathUI(proposeType)!.ctaLabel}` : 'Submit'}
           </button>
         </div>
       ) : !isCommentSubmitted && !simulationDone ? (
@@ -728,21 +719,236 @@ export function ProposalPanel({ rootBlock, currentChildren, onClose }: ProposalP
   );
 }
 
+// ─── What's Next Section ───
+// When allowOverride=false, auto-selects the MetaRule-configured path.
+// When allowOverride=true, shows all options with default highlighted.
+
+function WhatNextSection({
+  canBypassGate,
+  hasCrossSectionImpact,
+  maxImpactLevel,
+  defaultPath,
+  defaultNotifyLevel,
+  allowOverride,
+  impactedSections,
+  negotiateRules,
+  onSetProposeType,
+  onSetReasoning,
+  onSetNotifyLevels,
+  onSetPersonalNotes,
+  onSelfResolve,
+}: {
+  canBypassGate: boolean;
+  hasCrossSectionImpact: boolean;
+  maxImpactLevel: ImpactLevel;
+  defaultPath: ProposeType;
+  defaultNotifyLevel: NotifyLevel;
+  allowOverride: boolean;
+  impactedSections: ImpactedSection[];
+  negotiateRules: NegotiateRules;
+  onSetProposeType: (type: ProposeType) => void;
+  onSetReasoning: (r: string) => void;
+  onSetNotifyLevels: (levels: Map<string, NotifyLevel>) => void;
+  onSetPersonalNotes: (notes: Map<string, string>) => void;
+  onSelfResolve: () => void;
+}) {
+  // Helper: apply a path with its default notify levels
+  const applyPath = (path: ProposeType) => {
+    const levels = new Map<string, NotifyLevel>();
+    const notes = new Map<string, string>();
+    impactedSections.forEach(s => {
+      if (s.impactLevel === 'significant') {
+        levels.set(s.sectionId, 'notify');
+        if (s.reason) notes.set(s.sectionId, s.reason);
+      } else {
+        levels.set(s.sectionId, defaultNotifyLevel);
+      }
+    });
+    onSetNotifyLevels(levels);
+    onSetPersonalNotes(notes);
+    onSetProposeType(path);
+  };
+
+  // Helper: apply bypass (direct application)
+  const applyBypass = () => {
+    onSetProposeType('decided');
+    onSetReasoning('Applied directly (no coordination needed per team rules)');
+    const levels = new Map<string, NotifyLevel>();
+    impactedSections.forEach(s => levels.set(s.sectionId, defaultNotifyLevel));
+    onSetNotifyLevels(levels);
+  };
+
+  // Path display info — driven by registry
+  const pathLabel = (path: ProposeType) => getPathUI(path)?.label ?? path;
+  const pathDesc = (path: ProposeType) => getPathUI(path)?.description ?? '';
+  const pathIcon = (path: ProposeType) => {
+    const ui = getPathUI(path);
+    if (!ui) return null;
+    const { Icon, textColor } = ui;
+    return <Icon className={`h-3.5 w-3.5 ${textColor} flex-shrink-0 mt-0.5`} />;
+  };
+
+  // ─── Gate bypass: no coordination needed ───
+  if (canBypassGate) {
+    return (
+      <div className="mt-3 pt-2.5 border-t mx-0.5">
+        <div className="p-2 rounded-lg border border-green-200 bg-green-50/50 mb-1.5">
+          <div className="text-xs text-green-800 font-medium">No coordination needed</div>
+          <div className="text-[11px] text-green-700 mt-0.5">
+            {!hasCrossSectionImpact
+              ? "This change doesn\u2019t affect other sections."
+              : maxImpactLevel !== 'significant'
+                ? "All impacts are minor \u2014 your team\u2019s rules allow direct application."
+                : "You own this section and can self-resolve."}
+          </div>
+        </div>
+        <button
+          onClick={applyBypass}
+          className="w-full flex items-start gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors border border-green-200 hover:bg-green-50 text-green-800"
+        >
+          <UserCheck className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+          <div>
+            <span className="font-medium">Apply directly</span>
+            {impactedSections.length > 0 && (
+              <span className="text-green-700"> — {defaultNotifyLevel === 'skip' ? 'silently' : `with ${defaultNotifyLevel}`}</span>
+            )}
+          </div>
+        </button>
+
+        {/* Self-resolve option */}
+        <div className="border-t pt-2 mt-2">
+          <button
+            onClick={onSelfResolve}
+            className="w-full flex items-start gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground"
+          >
+            <Edit2 className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+            <div>
+              <span className="font-medium">I&apos;ll adjust my writing</span>
+              <span> — No outline change needed</span>
+            </div>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── No override: auto-apply the configured path ───
+  if (!allowOverride) {
+    return (
+      <div className="mt-3 pt-2.5 border-t mx-0.5">
+        <div className="text-xs font-medium text-foreground mb-2 px-0.5">
+          Your team&apos;s configured process:
+        </div>
+        <div className="p-2.5 rounded-lg border border-primary/20 bg-primary/[0.03] mb-2">
+          <div className="flex items-center gap-2">
+            {pathIcon(defaultPath)}
+            <div>
+              <div className="text-xs font-medium">{pathLabel(defaultPath)}</div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">{pathDesc(defaultPath)}</div>
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={() => applyPath(defaultPath)}
+          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded-md transition-colors bg-primary text-primary-foreground hover:bg-primary/90"
+        >
+          <Send className="h-3 w-3" />
+          {getPathUI(defaultPath)?.ctaLabel ?? 'Submit'}
+        </button>
+
+        {/* Self-resolve option */}
+        <div className="border-t pt-2 mt-2">
+          <button
+            onClick={onSelfResolve}
+            className="w-full flex items-start gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground"
+          >
+            <Edit2 className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+            <div>
+              <span className="font-medium">I&apos;ll adjust my writing</span>
+              <span> — No outline change needed</span>
+            </div>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Override allowed: show all options with default highlighted ───
+  const allPaths: ProposeType[] = getAllPathUIs().map(ui => ui.id as ProposeType);
+
+  return (
+    <div className="mt-3 pt-2.5 border-t mx-0.5">
+      <div className="text-xs font-medium text-foreground mb-2 px-0.5">How should the team handle this?</div>
+      <div className="space-y-1 mb-2.5">
+        {allPaths.map(path => (
+          <button
+            key={path}
+            onClick={() => applyPath(path)}
+            className={`w-full flex items-start gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors border hover:bg-muted hover:border-primary/30 ${
+              defaultPath === path ? 'border-primary/30 bg-primary/[0.03]' : ''
+            }`}
+          >
+            {pathIcon(path)}
+            <div>
+              <span className="font-medium">{pathLabel(path)}</span>
+              <span className="text-muted-foreground"> — {pathDesc(path)}</span>
+              {defaultPath === path && (
+                <span className="text-primary text-[10px] ml-1">(default)</span>
+              )}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Self-resolve option */}
+      <div className="border-t pt-2">
+        <button
+          onClick={onSelfResolve}
+          className="w-full flex items-start gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground"
+        >
+          <Edit2 className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+          <div>
+            <span className="font-medium">I&apos;ll adjust my writing</span>
+            <span> — No outline change needed</span>
+          </div>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Negotiate sub-options (expandable from "Negotiate" row) ───
 
-function NegotiateSubOptions({ onSelect }: { onSelect: (type: ProposeType) => void }) {
+function NegotiateSubOptions({ onSelect, defaultPath }: { onSelect: (type: ProposeType) => void; defaultPath?: string }) {
   const [expanded, setExpanded] = useState(false);
+
+  const negotiatePaths: ProposeType[] = ['negotiate', 'input', 'discussion'];
+  const options = negotiatePaths.map(type => {
+    const ui = getPathUI(type);
+    const Icon = ui?.Icon;
+    return {
+      type,
+      icon: Icon ? <Icon className={`h-3.5 w-3.5 ${ui?.textColor ?? 'text-muted-foreground'} flex-shrink-0 mt-0.5`} /> : null,
+      label: ui?.label ?? type,
+      desc: ui?.description ?? '',
+    };
+  });
 
   if (!expanded) {
     return (
       <button
         onClick={() => setExpanded(true)}
-        className="w-full flex items-start gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors border hover:bg-muted hover:border-primary/30"
+        className={`w-full flex items-start gap-2 px-2 py-1.5 text-left text-xs rounded-md transition-colors border hover:bg-muted hover:border-primary/30 ${
+          defaultPath && defaultPath !== 'decided' ? 'border-primary/30 bg-primary/[0.03]' : ''
+        }`}
       >
         <Users className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0 mt-0.5" />
         <div>
           <span className="font-medium">Ask for input</span>
           <span className="text-muted-foreground"> — Decision isn&apos;t final, need the team</span>
+          {defaultPath && defaultPath !== 'decided' && (
+            <span className="text-primary text-[10px] ml-1">(default)</span>
+          )}
         </div>
       </button>
     );
@@ -756,36 +962,26 @@ function NegotiateSubOptions({ onSelect }: { onSelect: (type: ProposeType) => vo
         </div>
       </div>
       <div className="p-1 space-y-0.5">
-        <button
-          onClick={() => onSelect('negotiate')}
-          className="w-full flex items-start gap-2 px-2 py-2 text-left text-xs rounded-md transition-colors hover:bg-muted"
-        >
-          <Vote className="h-3.5 w-3.5 text-indigo-500 flex-shrink-0 mt-0.5" />
-          <div>
-            <div className="font-medium">Vote on this</div>
-            <div className="text-[10px] text-muted-foreground mt-0.5">I&apos;d like team approval before proceeding</div>
-          </div>
-        </button>
-        <button
-          onClick={() => onSelect('input')}
-          className="w-full flex items-start gap-2 px-2 py-2 text-left text-xs rounded-md transition-colors hover:bg-muted"
-        >
-          <UserCheck className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0 mt-0.5" />
-          <div>
-            <div className="font-medium">You make the call</div>
-            <div className="text-[10px] text-muted-foreground mt-0.5">This affects your part — you decide what to do</div>
-          </div>
-        </button>
-        <button
-          onClick={() => onSelect('discussion')}
-          className="w-full flex items-start gap-2 px-2 py-2 text-left text-xs rounded-md transition-colors hover:bg-muted"
-        >
-          <MessagesSquare className="h-3.5 w-3.5 text-amber-500 flex-shrink-0 mt-0.5" />
-          <div>
-            <div className="font-medium">Let&apos;s discuss</div>
-            <div className="text-[10px] text-muted-foreground mt-0.5">Not sure yet — want to talk it through first</div>
-          </div>
-        </button>
+        {options.map(opt => (
+          <button
+            key={opt.type}
+            onClick={() => onSelect(opt.type)}
+            className={`w-full flex items-start gap-2 px-2 py-2 text-left text-xs rounded-md transition-colors hover:bg-muted ${
+              defaultPath === opt.type ? 'bg-primary/[0.04]' : ''
+            }`}
+          >
+            {opt.icon}
+            <div>
+              <div className="font-medium">
+                {opt.label}
+                {defaultPath === opt.type && (
+                  <span className="text-primary text-[10px] ml-1 font-normal">(default)</span>
+                )}
+              </div>
+              <div className="text-[10px] text-muted-foreground mt-0.5">{opt.desc}</div>
+            </div>
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -820,17 +1016,11 @@ function NegotiateForm({
       ? "This affects your section. Here's what I'm thinking..."
       : "I'm not sure about this yet. What do you all think about...";
 
-  const modeLabel = proposeType === 'negotiate'
-    ? 'Vote'
-    : proposeType === 'input'
-      ? 'Your Call'
-      : 'Discussion';
-
-  const modeColor = proposeType === 'negotiate'
-    ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/20'
-    : proposeType === 'input'
-      ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20'
-      : 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20';
+  const ui = getPathUI(proposeType);
+  const modeLabel = ui?.receiverLabel ?? proposeType;
+  const modeColor = ui
+    ? `${ui.textColor} ${ui.darkTextColor} ${ui.bgColor} ${ui.darkBgColor}`
+    : 'text-muted-foreground bg-muted';
 
   const activeCount = impactedSections.filter(s => !excludedUserIds.has(s.ownerUserId)).length;
 

@@ -3,6 +3,32 @@ import type { IntentBlock, WritingBlock } from "@/lib/partykit";
 import type { User } from "@supabase/supabase-js";
 import { importMarkdownAsIntents } from "@/lib/importIntents";
 
+// Build a flat array of blocks in visual (DFS) order:
+// root blocks sorted by position, with children nested under each parent (also sorted by position)
+function buildVisualOrder(blocks: readonly IntentBlock[]): IntentBlock[] {
+  const childrenMap = new Map<string | null, IntentBlock[]>();
+  for (const b of blocks) {
+    const key = b.parentId ?? null;
+    if (!childrenMap.has(key)) childrenMap.set(key, []);
+    childrenMap.get(key)!.push(b);
+  }
+  // Sort each group by position
+  for (const arr of childrenMap.values()) {
+    arr.sort((a, b) => a.position - b.position);
+  }
+  const result: IntentBlock[] = [];
+  function walk(parentId: string | null) {
+    const kids = childrenMap.get(parentId);
+    if (!kids) return;
+    for (const kid of kids) {
+      result.push(kid);
+      walk(kid.id);
+    }
+  }
+  walk(null);
+  return result;
+}
+
 interface UseIntentBlockOperationsParams {
   intentBlocks: readonly IntentBlock[];
   writingBlocks: readonly WritingBlock[];
@@ -54,7 +80,9 @@ export function useIntentBlockOperations({
       if (!existingLinkedIntents.has(intent.id)) {
         maxPosition++;
         const newWritingBlock: WritingBlock = {
-          id: `writing-${Date.now()}-${Math.random()}`,
+          // Deterministic ID: all users generate the same ID for the same intent,
+          // so they connect to the same Yjs room even with race conditions.
+          id: `writing-${intent.id}`,
           content: "",
           position: maxPosition,
           linkedIntentId: intent.id,
@@ -130,8 +158,10 @@ export function useIntentBlockOperations({
       parentId,
       level,
       intentTag: undefined,
-      intentCreatedBy: undefined,
-      intentCreatedAt: undefined,
+      intentCreatedBy: user.id,
+      intentCreatedByName: user.user_metadata?.name || user.user_metadata?.full_name || user.email?.split('@')[0] || '',
+      intentCreatedByEmail: user.email ?? undefined,
+      intentCreatedAt: Date.now(),
       isCollapsed: false,
       assignee: undefined,
     };
@@ -198,16 +228,18 @@ export function useIntentBlockOperations({
   // Indent block (increase level, make it a child of previous block)
   const indentBlock = useCallback(
     (blockId: string) => {
-      const blockIndex = intentBlocks.findIndex((b) => b.id === blockId);
+      // Build visual (DFS) order: root blocks sorted by position, children nested under parents
+      const visualOrder = buildVisualOrder(intentBlocks);
+      const blockIndex = visualOrder.findIndex((b) => b.id === blockId);
       if (blockIndex <= 0) return;
 
-      const currentBlock = intentBlocks[blockIndex];
+      const currentBlock = visualOrder[blockIndex];
       const wasRoot = currentBlock.level === 0 && !currentBlock.parentId;
 
       let newParentId: string | null = null;
       for (let i = blockIndex - 1; i >= 0; i--) {
-        const prevBlock = intentBlocks[i];
-        if (prevBlock.level === currentBlock.level) {
+        const prevBlock = visualOrder[i];
+        if (prevBlock.level === currentBlock.level && prevBlock.parentId === currentBlock.parentId) {
           newParentId = prevBlock.id;
           break;
         } else if (prevBlock.level < currentBlock.level) {

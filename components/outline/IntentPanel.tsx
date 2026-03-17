@@ -66,6 +66,7 @@ type IntentPanelProps = {
   onRegisterYjsExporter?: (blockId: string, exporter: () => Uint8Array) => void;
   markdownExporters?: Map<string, () => Promise<string>>;
   onRegisterMarkdownExporter?: (blockId: string, exporter: () => Promise<string>) => void;
+  onRegisterParagraphAttributionExporter?: (blockId: string, exporter: () => import("@/platform/data-model").ParagraphAttribution[]) => void;
   ensureWritingBlocksForIntents: () => void;
   roomMeta?: RoomMeta;
   dependencies?: IntentDependency[];
@@ -164,6 +165,7 @@ export default function IntentPanel({
   onRegisterYjsExporter,
   markdownExporters,
   onRegisterMarkdownExporter,
+  onRegisterParagraphAttributionExporter,
   ensureWritingBlocksForIntents,
   roomMeta,
   dependencies,
@@ -330,8 +332,10 @@ export default function IntentPanel({
           (storedLevels[sectionId] as 'skip' | 'heads-up' | 'notify') || 'skip';
 
         // Fallback: derive from impact level when notify_levels not stored
+        // Use MetaRule's default notify level when available
         if (notifyLevel === 'skip' && impact) {
-          notifyLevel = impact.impactLevel === 'significant' ? 'notify' : 'heads-up';
+          const metaDefault = roomMeta?.metaRule?.coordination?.decided?.defaultNotifyLevel;
+          notifyLevel = impact.impactLevel === 'significant' ? 'notify' : (metaDefault || 'heads-up');
         }
 
         // For negotiate types, default to 'notify' even without impact data
@@ -878,6 +882,7 @@ export default function IntentPanel({
     updateIntentBlockRaw,
     onRegisterYjsExporter,
     onRegisterMarkdownExporter,
+    onRegisterParagraphAttributionExporter,
     blocks,
     registerBlockRef,
     // Drift detection
@@ -928,6 +933,7 @@ export default function IntentPanel({
     refreshProposals,
     expandedThreadProposalId,
     setExpandedThreadProposalId,
+    metaRule: roomMeta?.metaRule,
   }), [
     blockMap, collapsedBlocks, editingBlock, hoveredBlock, selectedBlockId,
     dragDrop.dragOverId, dragDrop.activeId, isSetupPhase, activeSetupTab,
@@ -935,7 +941,7 @@ export default function IntentPanel({
     addBlock, updateBlock, deleteBlock, indentBlock, outdentBlock,
     assignBlock, unassignBlock, currentUser, documentMembers, onlineUserIds, userAvatarMap,
     dependencies, addDependency, depLinks.selectedDepId, depLinks.setSelectedDepId, depLinks.hoveredDepId, depLinks.setHoveredDepId, depLinks.depColorMap, depLinks.connectedBlockIds, depLinks.dragState, depLinks.handleDragStart, intentToWritingMap, roomId, writingBlocks, deleteWritingBlock,
-    updateIntentBlockRaw, onRegisterYjsExporter, onRegisterMarkdownExporter, blocks, registerBlockRef,
+    updateIntentBlockRaw, onRegisterYjsExporter, onRegisterMarkdownExporter, onRegisterParagraphAttributionExporter, blocks, registerBlockRef,
     drift.checkingIds, drift.triggerCheck, drift.getDriftStatus, drift.getSentenceHighlights, drift.getConflictForDependency, drift.getSimulatedOutline, drift.hasSimulatedOutline,
     hoveredIntentForLink, setHoveredIntentForLink, hoveredOrphanHint, setHoveredOrphanHint, hoveredIntentFromWriting, setHoveredIntentFromWriting,
     handledOrphanStarts, markOrphanHandled,
@@ -946,7 +952,7 @@ export default function IntentPanel({
     proposalDraft, openProposalDraft,
     viewingProposalId, viewingProposalForSectionId, viewingProposalAffectedSectionId,
     getSectionNotifications, refreshProposals,
-    expandedThreadProposalId,
+    expandedThreadProposalId, roomMeta?.metaRule,
   ]);
 
   return (
@@ -1032,7 +1038,7 @@ export default function IntentPanel({
               />
             ) : (
               <SortableContext
-                items={rootBlocks.map(b => b.id)}
+                items={blocks.map(b => b.id)}
                 strategy={verticalListSortingStrategy}
               >
                 <div ref={containerRef} className="flex-1 overflow-y-auto p-4 min-h-0 relative bg-background" onClick={() => depLinks.setSelectedDepId(null)}>

@@ -3,6 +3,8 @@
 import { useState, useCallback } from "react";
 import usePartySocket from "partysocket/react";
 import type { RelationshipType } from "./relationship-types";
+import type { MetaRuleConfig } from "./metarule-types";
+import type { MetaRuleV2 } from "./metarule-engine";
 
 // Re-export relationship types from shared module
 export { RELATIONSHIP_TYPES, type RelationshipType } from "./relationship-types";
@@ -52,6 +54,8 @@ export type RoomMeta = {
   baselineVersion: number;
   phaseTransitionAt?: number;
   phaseTransitionBy?: string;
+  metaRule?: MetaRuleConfig;
+  metaRuleV2?: MetaRuleV2;
 };
 
 export type IntentDependency = {
@@ -267,6 +271,21 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
     [socket]
   );
 
+  const updateWritingBlock = useCallback(
+    (blockId: string, updates: Partial<WritingBlock>) => {
+      if (!socket) return;
+      socket.send(JSON.stringify({ type: "update_writing_block", blockId, updates }));
+      setState((prev) => {
+        const index = prev.writingBlocks.findIndex((b) => b.id === blockId);
+        if (index === -1) return prev;
+        const newBlocks = [...prev.writingBlocks];
+        newBlocks[index] = { ...newBlocks[index], ...updates };
+        return { ...prev, writingBlocks: newBlocks };
+      });
+    },
+    [socket]
+  );
+
   // Room meta — NO optimistic update, wait for server broadcast
   const updateRoomMeta = useCallback(
     (updates: Partial<RoomMeta>) => {
@@ -320,6 +339,7 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
     addIntentBlock,
     deleteIntentBlock,
     addWritingBlock,
+    updateWritingBlock,
     deleteWritingBlock,
     updateRoomMeta,
     addDependency,

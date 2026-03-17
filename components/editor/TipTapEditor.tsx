@@ -15,6 +15,7 @@ import YPartyKitProvider from "y-partykit/provider";
 
 // Local imports
 import type { TipTapEditorProps, HighlightRange, SentenceAnchor } from "./types";
+import type { ParagraphAttribution } from "@/platform/data-model";
 import { findTextRange, findTextRangeInDoc } from "./utils/textRangeFinder";
 import { createHighlightPlugin, highlightPluginKey } from "./plugins/highlightPlugin";
 import { createIssueDetailPanel } from "./widgets";
@@ -37,6 +38,7 @@ export default function TipTapEditor({
   updateIntentBlock,
   onRegisterYjsExporter,
   onRegisterMarkdownExporter,
+  onRegisterParagraphAttributionExporter,
   onParagraphEnd,
   onCheckAlignment,
   isCheckingAlignment,
@@ -68,24 +70,35 @@ export default function TipTapEditor({
   const [modifyingOrphanStart, setModifyingOrphanStart] = useState<string | null>(null);
   const [expandedMissingIntentId, setExpandedMissingIntentId] = useState<string | null>(null);
 
+  // ─── Paragraph attribution tracking ───
+  // Tracks which user last edited each paragraph. Stored as a map of
+  // paragraph textPrefix → attribution. Updated on each editor transaction.
+  const paragraphAttributionsRef = useRef<Map<string, ParagraphAttribution>>(new Map());
+  const prevParagraphTextsRef = useRef<string[]>([]);
+
   // Precomputed highlight ranges for mouse detection
   const highlightRangesRef = useRef<HighlightRange[]>([]);
 
-  // Create Yjs doc and provider - stable reference
-  const { doc, provider } = useMemo(() => {
-    const d = new Y.Doc();
-    const p = new YPartyKitProvider(
-      process.env.NEXT_PUBLIC_PARTYKIT_HOST || "localhost:1999",
-      `${roomId}-writing-${writingBlock.id}`,
-      d,
-      { connect: true, party: "main" }
-    );
-    return { doc: d, provider: p };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, writingBlock.id]);
+  // Create Yjs doc - stable reference (never destroyed during component lifecycle)
+  const doc = useMemo(() => new Y.Doc(), [roomId, writingBlock.id]);
 
-  // Track sync state with timeout fallback
+  // Create provider - stable reference, connect: false (managed by effect)
+  const provider = useMemo(
+    () =>
+      new YPartyKitProvider(
+        process.env.NEXT_PUBLIC_PARTYKIT_HOST || "localhost:1999",
+        `${roomId}-writing-${writingBlock.id}`,
+        doc,
+        { connect: false, party: "main" }
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [roomId, writingBlock.id, doc]
+  );
+
+  // Manage connection lifecycle in effect (Strict Mode safe)
   useEffect(() => {
+    provider.connect();
+
     const handleSync = () => setIsSynced(true);
 
     if (provider.synced) {
@@ -102,11 +115,12 @@ export default function TipTapEditor({
     return () => {
       clearTimeout(timeout);
       provider.off("synced", handleSync);
+      // Only disconnect, don't destroy — Strict Mode will re-run this effect
+      // and call provider.connect() again. Actual cleanup happens when
+      // deps change (new roomId/writingBlock) which creates new useMemo instances.
       provider.disconnect();
-      provider.destroy();
-      doc.destroy();
     };
-  }, [provider, doc]);
+  }, [provider]);
 
   // Refs for simulated writing callbacks
   const editorRef = useRef<ReturnType<typeof useEditor>>(null);
@@ -225,6 +239,71 @@ export default function TipTapEditor({
   useEffect(() => {
     (editorRef as React.MutableRefObject<typeof editor>).current = editor;
   }, [editor]);
+
+  // ─── Paragraph attribution: track which paragraphs the current user modifies ───
+  useEffect(() => {
+    if (!editor) return;
+
+    // Extract paragraph texts from the editor
+    function getParagraphTexts(): string[] {
+      const texts: string[] = [];
+      editor!.state.doc.forEach((node) => {
+        if (node.isBlock) {
+          texts.push(node.textContent);
+        }
+      });
+      return texts;
+    }
+
+    // Initialize previous paragraph texts on first load
+    if (prevParagraphTextsRef.current.length === 0 && editor.state.doc.content.size > 2) {
+      prevParagraphTextsRef.current = getParagraphTexts();
+    }
+
+    const handleTransaction = () => {
+      const currentTexts = getParagraphTexts();
+      const prevTexts = prevParagraphTextsRef.current;
+
+      // Find paragraphs that changed
+      const maxLen = Math.max(currentTexts.length, prevTexts.length);
+      for (let i = 0; i < maxLen; i++) {
+        const curr = currentTexts[i];
+        const prev = prevTexts[i];
+
+        if (curr !== prev && curr !== undefined) {
+          const prefix = curr.slice(0, 50);
+          if (!prefix.trim()) continue; // skip empty paragraphs
+
+          paragraphAttributionsRef.current.set(prefix, {
+            index: i,
+            textPrefix: prefix,
+            lastEditBy: {
+              userId: user.id,
+              userName: user.user_metadata?.name || user.user_metadata?.full_name || user.email?.split('@')[0] || '',
+              at: Date.now(),
+            },
+          });
+        }
+      }
+
+      // Clean up attributions for deleted paragraphs
+      const currentPrefixes = new Set(
+        currentTexts.filter(t => t.trim()).map(t => t.slice(0, 50))
+      );
+      for (const key of paragraphAttributionsRef.current.keys()) {
+        if (!currentPrefixes.has(key)) {
+          paragraphAttributionsRef.current.delete(key);
+        }
+      }
+
+      prevParagraphTextsRef.current = currentTexts;
+    };
+
+    editor.on('update', handleTransaction);
+    return () => {
+      editor.off('update', handleTransaction);
+    };
+  }, [editor, user]);
 
   // Clear expanded state when entering filter mode (all missing intents will be shown expanded)
   useEffect(() => {
@@ -561,11 +640,23 @@ export default function TipTapEditor({
     if (!onRegisterMarkdownExporter || !editor) return;
 
     const exportMarkdown = async (): Promise<string> => {
-      return editor.getText();
+      return editor.getHTML();
     };
 
     onRegisterMarkdownExporter(writingBlock.id, exportMarkdown);
   }, [onRegisterMarkdownExporter, writingBlock.id, editor]);
+
+  // Register paragraph attribution exporter
+  useEffect(() => {
+    if (!onRegisterParagraphAttributionExporter) return;
+
+    const exportAttributions = (): ParagraphAttribution[] => {
+      return Array.from(paragraphAttributionsRef.current.values())
+        .sort((a, b) => a.index - b.index);
+    };
+
+    onRegisterParagraphAttributionExporter(writingBlock.id, exportAttributions);
+  }, [onRegisterParagraphAttributionExporter, writingBlock.id]);
 
   // Register Yjs exporter
   useEffect(() => {
@@ -574,6 +665,30 @@ export default function TipTapEditor({
     const exportContent = () => Y.encodeStateAsUpdate(doc);
     onRegisterYjsExporter(writingBlock.id, exportContent);
   }, [onRegisterYjsExporter, writingBlock.id, doc]);
+
+  // ─── Content recovery ───
+  // Yjs only handles real-time sync (no server-side persistence).
+  // If Yjs doc is empty after sync (no other clients online), load from DB snapshot.
+  const hasRecoveredRef = useRef(false);
+  useEffect(() => {
+    if (!isSynced || !editor || hasRecoveredRef.current) return;
+    hasRecoveredRef.current = true;
+
+    const currentText = editor.getText().trim();
+    if (currentText) return; // Yjs has content (another client is online), no recovery needed
+
+    // Fetch latest snapshot from DB
+    const sectionId = intent.id;
+    fetch(`/api/writing-snapshots?documentId=${roomId}&sectionId=${sectionId}&limit=1`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (!data?.snapshots?.[0]?.content_markdown) return;
+        // Double-check editor is still empty (another client may have synced by now)
+        if (editor.getText().trim()) return;
+        editor.commands.setContent(data.snapshots[0].content_markdown);
+      })
+      .catch(() => {/* no snapshot available, start blank */});
+  }, [isSynced, editor, intent.id, roomId]);
 
   // Handle Enter key for paragraph end callback
   useEffect(() => {

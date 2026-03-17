@@ -51,25 +51,21 @@ export function useIntentDragDrop({ blocks, reorderBlocks }: UseIntentDragDropPr
       const overBlock = blocks.find(b => b.id === over.id);
 
       if (activeBlock && overBlock) {
-        // Only allow reordering within the same parent
-        if (activeBlock.parentId !== overBlock.parentId) {
-          setActiveId(null);
-          setDragOverId(null);
-          return;
+        if (activeBlock.parentId === overBlock.parentId) {
+          // Same parent: determine position by current index
+          const siblings = blocks
+            .filter(b => b.parentId === activeBlock.parentId)
+            .sort((a, b) => a.position - b.position);
+
+          const activeIndex = siblings.findIndex(b => b.id === active.id);
+          const overIndex = siblings.findIndex(b => b.id === over.id);
+          const position = activeIndex < overIndex ? 'after' : 'before';
+
+          reorderBlocks(active.id as string, over.id as string, position);
+        } else {
+          // Cross-parent: move to target's parent, insert after target
+          reorderBlocks(active.id as string, over.id as string, 'after');
         }
-
-        // Get siblings (blocks with same parentId)
-        const siblings = blocks
-          .filter(b => b.parentId === activeBlock.parentId)
-          .sort((a, b) => a.position - b.position);
-
-        const activeIndex = siblings.findIndex(b => b.id === active.id);
-        const overIndex = siblings.findIndex(b => b.id === over.id);
-
-        // If dragging down, insert after. If dragging up, insert before.
-        const position = activeIndex < overIndex ? 'after' : 'before';
-
-        reorderBlocks(active.id as string, over.id as string, position);
       }
     }
 

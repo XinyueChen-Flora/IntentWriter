@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Check, X as XIcon, Loader2, MessageSquare, Send,
-  Vote, UserCheck, MessagesSquare,
 } from "lucide-react";
+import { getPathUI } from "@/platform/coordination/ui";
 import { AutoResizeTextarea } from "@/components/ui/AutoResizeTextarea";
 import { useIntentPanelContext } from "../outline/IntentPanelContext";
 import UserAvatar from "@/components/user/UserAvatar";
@@ -217,13 +217,10 @@ export function PendingDecisionView({ sectionId, proposalId, onDismiss }: Pendin
     );
   }
 
-  const TypeIcon = proposeType === 'negotiate' ? Vote : proposeType === 'input' ? UserCheck : MessagesSquare;
-  const typeLabel = proposeType === 'negotiate' ? 'Vote Requested' : proposeType === 'input' ? 'Your Decision' : 'Discussion';
-  const typeColor = proposeType === 'negotiate'
-    ? 'text-indigo-600 dark:text-indigo-400'
-    : proposeType === 'input'
-      ? 'text-emerald-600 dark:text-emerald-400'
-      : 'text-amber-600 dark:text-amber-400';
+  const pathUI = getPathUI(proposeType);
+  const TypeIcon = pathUI?.Icon ?? MessageSquare;
+  const typeLabel = pathUI?.receiverLabel ?? 'Action Required';
+  const typeColor = pathUI ? `${pathUI.textColor} ${pathUI.darkTextColor}` : 'text-muted-foreground';
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">

@@ -36,6 +36,7 @@ export type RoomMeta = {
   baselineVersion: number;
   phaseTransitionAt?: number;
   phaseTransitionBy?: string;
+  metaRule?: any; // MetaRuleConfig from lib/metarule-types.ts
 };
 
 export type IntentDependency = {
@@ -118,13 +119,13 @@ export default class WritingRoomServer implements Party.Server {
   }
 
   async onConnect(conn: Party.Connection, ctx: Party.ConnectionContext) {
-    const url = new URL(ctx.request.url);
-    const isYjsConnection = url.pathname.includes("-writing-");
+    // Use room.id (guaranteed to be the room name) instead of parsing URL
+    const isYjsConnection = this.room.id.includes("-writing-");
 
     if (isYjsConnection) {
-      return onConnect(conn, this.room, {
-        persist: { mode: "snapshot" },
-      });
+      // Yjs handles real-time sync only — no server-side persistence.
+      // Content is persisted via periodic snapshots to the database.
+      return onConnect(conn, this.room);
     }
 
     const state = await this.room.storage.get<RoomState>("state");
@@ -142,8 +143,14 @@ export default class WritingRoomServer implements Party.Server {
   }
 
   async onMessage(message: string | ArrayBuffer, sender: Party.Connection) {
+    // Binary messages = Yjs updates: relay to other clients
     if (message instanceof ArrayBuffer) {
       this.room.broadcast(message, [sender.id]);
+      return;
+    }
+
+    // Writing rooms only need binary relay (above); skip JSON handling
+    if (this.room.id.includes("-writing-")) {
       return;
     }
 
@@ -201,8 +208,11 @@ export default class WritingRoomServer implements Party.Server {
       case "add_writing_block": {
         const state = await this.room.storage.get<RoomState>("state");
         if (!state) return;
-        state.writingBlocks.push(data.block);
-        await this.room.storage.put("state", state);
+        // Dedup: skip if a writing block with this ID already exists
+        if (!state.writingBlocks.some(wb => wb.id === data.block.id)) {
+          state.writingBlocks.push(data.block);
+          await this.room.storage.put("state", state);
+        }
         this.room.broadcast(message, [sender.id]);
         break;
       }

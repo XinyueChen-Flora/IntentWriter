@@ -1,6 +1,7 @@
 import type { WritingBlock, IntentBlock } from "@/lib/partykit";
 import type { User } from "@supabase/supabase-js";
 import type { SentenceAnchor, SentenceHighlight, DependencyIssue, SupportingSentence, OrphanSentence, AlignedIntent } from "@/hooks/useDriftDetection";
+import type { ParagraphAttribution } from "@/platform/data-model";
 
 // Sentence highlights - supports both old and new formats
 export type SentenceHighlights = {
@@ -54,6 +55,7 @@ export type TipTapEditorProps = {
   updateIntentBlock: (blockId: string, updates: Partial<IntentBlock>) => void;
   onRegisterYjsExporter?: (blockId: string, exporter: () => Uint8Array) => void;
   onRegisterMarkdownExporter?: (blockId: string, exporter: () => Promise<string>) => void;
+  onRegisterParagraphAttributionExporter?: (blockId: string, exporter: () => ParagraphAttribution[]) => void;
   onParagraphEnd?: (writingBlockId: string, contentHash: string) => void;
   onCheckAlignment?: () => void;
   isCheckingAlignment?: boolean;

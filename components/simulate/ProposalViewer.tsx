@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { X, Plus, Minus, Edit2, Loader2, ArrowRight, ArrowLeft, MessageSquare, Clock, Check, XIcon, Vote, UserCheck, MessagesSquare, Send } from "lucide-react";
+import { X, Plus, Minus, Edit2, Loader2, ArrowRight, ArrowLeft, MessageSquare, Clock, Check, XIcon, Send } from "lucide-react";
+import { getPathUI } from "@/platform/coordination/ui";
 import { AutoResizeTextarea } from "@/components/ui/AutoResizeTextarea";
 import { useIntentPanelContext } from "../outline/IntentPanelContext";
 import { WordDiff } from "./WordDiff";
@@ -315,18 +316,19 @@ export function ProposalViewer() {
           /* Negotiate types: simple header with type badge */
           <div className="flex items-center justify-between px-3 py-1.5">
             <div className="flex items-center gap-1.5">
-              {proposeType === 'negotiate' && <Vote className="h-3 w-3 text-indigo-500" />}
-              {proposeType === 'input' && <UserCheck className="h-3 w-3 text-emerald-500" />}
-              {proposeType === 'discussion' && <MessagesSquare className="h-3 w-3 text-amber-500" />}
-              <span className={`text-[10px] font-semibold ${
-                proposeType === 'negotiate' ? 'text-indigo-600 dark:text-indigo-400'
-                  : proposeType === 'input' ? 'text-emerald-600 dark:text-emerald-400'
-                  : 'text-amber-600 dark:text-amber-400'
-              }`}>
-                {proposeType === 'negotiate' ? 'Vote Requested'
-                  : proposeType === 'input' ? 'Your Decision'
-                  : 'Discussion'}
-              </span>
+              {(() => {
+                const ui = getPathUI(proposeType);
+                if (!ui) return null;
+                const { Icon, textColor, darkTextColor, receiverLabel } = ui;
+                return (
+                  <>
+                    <Icon className={`h-3 w-3 ${textColor}`} />
+                    <span className={`text-[10px] font-semibold ${textColor} ${darkTextColor}`}>
+                      {receiverLabel}
+                    </span>
+                  </>
+                );
+              })()}
             </div>
             <button onClick={onClose} className="p-0.5 hover:bg-secondary rounded text-muted-foreground hover:text-foreground">
               <X className="h-3 w-3" />
@@ -702,15 +704,20 @@ function VoteStatusBar({
     return m?.name || m?.email?.split('@')[0] || 'Someone';
   };
 
+  const pathUI = getPathUI(proposeType);
+  if (!pathUI) return null;
+  const { Icon, textColor, darkTextColor, bgColor, darkBgColor } = pathUI;
+
+  // Vote mode: show approve/reject tally
   if (proposeType === 'negotiate') {
     const threshold = rules?.voteThreshold || 'majority';
     const thresholdLabel = threshold === 'all' ? 'Unanimous' : threshold === 'majority' ? 'Majority' : 'Any';
     return (
-      <div className="px-3 py-1.5 bg-indigo-50/50 dark:bg-indigo-900/10 border-b">
+      <div className={`px-3 py-1.5 ${bgColor}/50 ${darkBgColor?.replace('/30', '/10')} border-b`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5 text-[10px]">
-            <Vote className="h-3 w-3 text-indigo-500" />
-            <span className="font-medium text-indigo-600 dark:text-indigo-400">{thresholdLabel}</span>
+            <Icon className={`h-3 w-3 ${textColor}`} />
+            <span className={`font-medium ${textColor} ${darkTextColor}`}>{thresholdLabel}</span>
           </div>
           <div className="flex items-center gap-2 text-[10px]">
             {approves.length > 0 && (
@@ -724,7 +731,6 @@ function VoteStatusBar({
             )}
           </div>
         </div>
-        {/* Individual votes with avatars */}
         {votes.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1">
             {votes.map(v => (
@@ -740,14 +746,15 @@ function VoteStatusBar({
     );
   }
 
+  // Input mode: show single response
   if (proposeType === 'input') {
     const decision = responses.length > 0 ? responses[0] : null;
     return (
-      <div className="px-3 py-1.5 bg-emerald-50/50 dark:bg-emerald-900/10 border-b">
+      <div className={`px-3 py-1.5 ${bgColor}/50 ${darkBgColor?.replace('/30', '/10')} border-b`}>
         <div className="flex items-center gap-1.5 text-[10px]">
-          <UserCheck className="h-3 w-3 text-emerald-500" />
+          <Icon className={`h-3 w-3 ${textColor}`} />
           {decision ? (
-            <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+            <span className={`${textColor} ${darkTextColor} font-medium`}>
               {getName(decision.user_id)} responded
               {decision.comment && <span className="font-normal text-foreground/70"> — &ldquo;{decision.comment}&rdquo;</span>}
             </span>
@@ -759,31 +766,28 @@ function VoteStatusBar({
     );
   }
 
-  if (proposeType === 'discussion') {
-    return (
-      <div className="px-3 py-1.5 bg-amber-50/50 dark:bg-amber-900/10 border-b">
-        <div className="flex items-center gap-1.5 text-[10px] mb-1">
-          <MessagesSquare className="h-3 w-3 text-amber-500" />
-          <span className="font-medium text-amber-600 dark:text-amber-400">{responses.length} response{responses.length !== 1 ? 's' : ''}</span>
-        </div>
-        {responses.length > 0 && (
-          <div className="space-y-1 ml-4">
-            {responses.map(v => (
-              <div key={v.id} className="flex items-start gap-1.5 text-[10px]">
-                <UserAvatar avatarUrl={userAvatarMap.get(v.user_id)} name={getName(v.user_id)} className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
-                <div>
-                  <span className="font-medium">{getName(v.user_id)}</span>
-                  {v.comment && <span className="text-foreground/70"> — {v.comment}</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+  // Discussion / other: show response count + thread
+  return (
+    <div className={`px-3 py-1.5 ${bgColor}/50 ${darkBgColor?.replace('/30', '/10')} border-b`}>
+      <div className="flex items-center gap-1.5 text-[10px] mb-1">
+        <Icon className={`h-3 w-3 ${textColor}`} />
+        <span className={`font-medium ${textColor} ${darkTextColor}`}>{responses.length} response{responses.length !== 1 ? 's' : ''}</span>
       </div>
-    );
-  }
-
-  return null;
+      {responses.length > 0 && (
+        <div className="space-y-1 ml-4">
+          {responses.map(v => (
+            <div key={v.id} className="flex items-start gap-1.5 text-[10px]">
+              <UserAvatar avatarUrl={userAvatarMap.get(v.user_id)} name={getName(v.user_id)} className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+              <div>
+                <span className="font-medium">{getName(v.user_id)}</span>
+                {v.comment && <span className="text-foreground/70"> — {v.comment}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── Response actions (receiver votes/responds) ───
@@ -804,13 +808,14 @@ function ResponseActions({
   isVoting: boolean;
 }) {
   const [showCommentFor, setShowCommentFor] = useState<string | null>(null);
+  const pathUI = getPathUI(proposeType);
 
   if (proposeType === 'negotiate') {
     // Vote mode: Approve / Reject with optional comment
     return (
       <div className="px-3 py-2 border-b space-y-2">
         <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-          Your vote
+          {pathUI?.receiverLabel ?? 'Your vote'}
         </div>
         {!showCommentFor ? (
           <div className="flex gap-1.5">
@@ -869,7 +874,7 @@ function ResponseActions({
     return (
       <div className="px-3 py-2 border-b space-y-2">
         <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-          Your decision
+          {pathUI?.receiverLabel ?? 'Your decision'}
         </div>
         {!showCommentFor ? (
           <div className="space-y-1">

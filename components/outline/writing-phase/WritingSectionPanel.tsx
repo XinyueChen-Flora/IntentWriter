@@ -499,6 +499,7 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
             updateIntentBlock={ctx.updateIntentBlockRaw}
             onRegisterYjsExporter={ctx.onRegisterYjsExporter}
             onRegisterMarkdownExporter={ctx.onRegisterMarkdownExporter}
+            onRegisterParagraphAttributionExporter={ctx.onRegisterParagraphAttributionExporter}
             onCheckAlignment={() => ctx.triggerCheck?.(block.id)}
             isCheckingAlignment={isRootChecking}
             sentenceHighlights={sentenceHighlights}
