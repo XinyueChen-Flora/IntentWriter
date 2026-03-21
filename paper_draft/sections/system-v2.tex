@@ -1,0 +1,290 @@
+\section{\system{}: An Open Platform for Coordination}
+\label{sec:system}
+
+Section~\ref{sec:framework} defined a coordination design space for collaborative writing---Awareness dimensions, a Gate threshold, and Negotiation dimensions. This section introduces \system{}, an open platform built on that design space. Rather than a fixed implementation, \system{} provides an extensible architecture: developers contribute new awareness and negotiation capabilities through declarative protocols; teams select from these capabilities and configure their own coordination pipeline. We describe the platform in three layers: Foundation (\S\ref{sec:foundation}), Protocol (\S\ref{sec:protocol}), and Team Interface (\S\ref{sec:team-interface}).
+
+% ─── FIGURE: System Architecture ───
+\begin{figure*}[t]
+\centering
+\fbox{\parbox{0.95\textwidth}{\centering\vspace{3cm}
+\textbf{Figure: \system{} Architecture}\\[0.5em]
+\small Three layers: Foundation (BNA as Living Outline + Data Model + View Layer), Protocol (Awareness Protocol + Negotiation Protocol), Team Interface (Setup + Writing + Coordination). Arrows show data flow: Data Model feeds into Protocol functions; Protocol outputs render through View Layer; Team Interface configures which functions and paths are active.
+\vspace{3cm}}}
+\caption{\system{} architecture. The Foundation layer provides the living outline (BNA), abstract data model, and view layer with entity-based UI slots. The Protocol layer enables developers to contribute awareness functions and negotiation paths through declarative registration. The Team Interface lets teams configure their coordination pipeline through guided setup. All built-in capabilities use the same protocol as third-party extensions.}
+\label{fig:architecture}
+\end{figure*}
+
+
+\subsection{Foundation}
+\label{sec:foundation}
+
+\subsubsection{Living Outline as BNA}
+
+\system{} adopts the \emph{living outline} as its BNA: a structured, continuously evolving outline where each node carries an intent description, dependency annotations, and ownership assignments. The living outline satisfies conditions C1--C5 from Section~\ref{sec:bna}:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=1pt]
+\item \textbf{C1 (Intent units):} Each outline node describes an intent---more abstract than prose, more concrete than a topic heading.
+\item \textbf{C2 (Dependencies):} The outline supports typed dependencies between nodes (depends-on, supports, must-be-consistent) and hierarchical structure (sections contain sub-intents).
+\item \textbf{C3 (Ownership):} Each node has a designated owner.
+\item \textbf{C4 (Traceability):} The system continuously computes the correspondence between writing and intent.
+\item \textbf{C5 (Negotiability):} The outline is the site of structured proposals---any modification to intents, dependencies, or assignments flows through the coordination pipeline.
+\end{itemize}
+
+\noindent The process of maintaining the living outline during writing itself pushes the negotiation boundary: writers continuously update their understanding of intent, and the outline continuously evolves to reflect the team's latest consensus.
+
+
+\subsubsection{Data Model}
+\label{sec:data-model}
+
+\system{} abstracts the negotiation space into a unified data model with two layers: a \textbf{structure layer} (the document's current state) and an \textbf{interaction layer} (the coordination process's dynamic state). This data model is the sole input interface for all functions---a function sees the complete current state and interaction history.
+
+\paragraph{Structure layer --- BNA + Writing.} The structure layer directly corresponds to the negotiation space defined in Section~\ref{sec:bna}:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=1pt]
+\item \textbf{IntentItem}: An intent unit---id, content description, hierarchical position (\texttt{parentId}), creator, last modifier, change status (stable / proposed / disputed).
+\item \textbf{Dependency}: A relationship between two IntentItems---type (depends-on / must-be-consistent / builds-upon), directionality, source (manual / AI-suggested / AI-confirmed).
+\item \textbf{Section}: A writing unit bound to an IntentItem via \texttt{intentId}---assignee, content, and per-paragraph attribution (who wrote each paragraph, who last edited it, when).
+\end{itemize}
+
+\noindent IntentItem and Section are bound through \texttt{section.intentId}---the concrete expression of the BNA $\rightarrow$ Writing relationship. The BNA layer is replaceable: in a living outline, IntentItem is a hierarchical node; in an argument map, it is a claim/evidence node; but the interface remains the same.
+
+\paragraph{Interaction layer --- dynamic coordination state.} Beyond document structure, functions need access to the coordination process itself---what previous functions have output, whether proposals are in progress, and what past resolutions have established:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=1pt]
+\item \textbf{FunctionResult}: Output from a previously run function---which function, which target, output data, timestamp. Subsequent functions can read prior results (e.g., \texttt{assess-change-impact} reads \texttt{check-drift}'s output without recomputing).
+\item \textbf{Proposal}: An active or resolved proposal---target IntentItem, proposed change type, proposer, status, votes, attached function results, resolution timestamp.
+\end{itemize}
+
+\noindent The system assembles the complete data model before invoking any function---developers do not need to understand how data is constructed from the real-time collaboration state.
+
+
+\subsubsection{View Layer}
+\label{sec:view-layer}
+
+The View Layer exposes declarative rendering interfaces on top of the data model. Developers declare ``show this type of UI on this data object''---the system handles rendering.
+
+The negotiation space naturally produces two core views and a global panel:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=1pt]
+\item \textbf{Outline View} (left): Renders the BNA. Currently a living outline; replacing the BNA form changes this view (e.g., to an argument map visualization). Developer declarations remain the same---the BNA adapter handles rendering.
+\item \textbf{Writing View} (right): Renders writing content. A paragraph editor bound to IntentItems in the Outline View.
+\item \textbf{Panel}: Global display space with pre-defined slots for analysis results, diffs, voting interfaces, and cross-object summaries.
+\end{itemize}
+
+Each entity type offers UI capabilities determined by its nature. The system provides base-level rendering capabilities; complex components (voting widgets, discussion threads) are built on top.
+
+\begin{table}[t]
+\small
+\caption{View Layer: entity-based UI capabilities and their slots.}
+\label{tab:view-layer}
+\begin{tabular}{@{}llp{2cm}p{3.5cm}@{}}
+\toprule
+\textbf{Entity} & \textbf{Capability} & \textbf{Slots} & \textbf{Description} \\
+\midrule
+\multirow{3}{*}{IntentItem} & Indicator & icon, value, color & Status marks beside the item \\
+& Expandable & content & Expandable area below the item \\
+& Actions & buttons, menu & Action entry points on the item \\
+\midrule
+\multirow{3}{*}{Paragraph} & Inline & range, style, tooltip & In-text: highlights, underlines, marks \\
+& Side & anchor, content & Beside text: comments, annotations \\
+& Block & position, content & Above/below: banners, alerts \\
+\midrule
+Dependency & State & style, color, label & Connection visual state \\
+\midrule
+\multirow{2}{*}{Panel} & Card & title, content, footer & Generic card container \\
+& Widget & content & Free rendering area \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Based on these base capabilities, we build higher-level components (ResultList, DiffView, VoteWidget, CommentThread) as rendering implementations for built-in functions. Developers can build custom components using the same base capabilities.
+
+
+\subsection{Protocol}
+\label{sec:protocol}
+
+\system{} enables extensibility through two declarative protocols: an \textbf{Awareness Protocol} for contributing sensing capabilities (corresponding to \S\ref{sec:awareness}), and a \textbf{Negotiation Protocol} for contributing coordination paths (corresponding to \S\ref{sec:negotiation}).
+
+\subsubsection{Awareness Protocol}
+
+An awareness function declares four fields:
+
+\begin{description}[leftmargin=1.5em, nosep, itemsep=3pt]
+\item[Target:] What position in the negotiation space---IntentItem, Section, Dependency, or Document.
+\item[Trigger:] When to run---ambient (continuous), on-action (event-triggered), on-demand (manual), post-resolve (after resolution).
+\item[Executor:] How to detect---\texttt{prompt} (AI model + configuration) or \texttt{local} (local function + configuration). Detection logic and configurable options (e.g., focus areas) are defined within the executor; \texttt{fill}-type config fields let teams input custom prompt text that is injected into the AI call.
+\item[Display:] Where to render results---entity type + base capability + slot data bindings using template syntax (e.g., \texttt{\{\{output.coverage\}\}}).
+\end{description}
+
+
+\subsubsection{Negotiation Protocol}
+
+A negotiation path declares fields corresponding to Propose $\rightarrow$ Deliberate $\rightarrow$ Resolve:
+
+\begin{table}[h]
+\small
+\begin{tabular}{@{}llp{5cm}@{}}
+\toprule
+\textbf{Stage} & \textbf{Field} & \textbf{Options} \\
+\midrule
+\multirow{3}{*}{Propose} & Initiation & Writer, system-suggested, owner-only \\
+& Scope & Modify/add/delete intent, adjust deps, reassign \\
+& Framing & Auto-attach which awareness results as context \\
+\midrule
+\multirow{3}{*}{Deliberate} & Participation & Direct dependents, all owners, all members \\
+& Mechanism & Voting, discussion, silent-approval \\
+& Response & Approve, reject, counter-propose, defer \\
+\midrule
+\multirow{3}{*}{Resolve} & Criteria & Unanimous, majority, stakeholder, proposer \\
+& Fallback & Status quo, timeout auto-resolve, escalate \\
+& Outcome & Update BNA, notify, record history, re-trigger awareness \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\subsubsection{How It Works}
+
+Registering a function via \texttt{registerFunction()} integrates it into the system like installing a plugin:
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=1pt]
+\item \textbf{Register}: The function declares target, trigger, executor, output schema, and display bindings.
+\item \textbf{Trigger}: The system invokes the function at the right moment---ambient functions run on document changes; on-action functions run on specific events (e.g., proposal submission).
+\item \textbf{Execute}: The system passes the current data model (IntentItems + Sections + Dependencies + interaction layer). For prompt executors, data and team configuration are injected into the prompt; for local executors, the function runs directly.
+\item \textbf{Render}: The system binds output data to the declared entity slots---no UI code needed from the developer.
+\item \textbf{Store}: Output is stored as a FunctionResult in the interaction layer, available to subsequent functions.
+\end{enumerate}
+
+\noindent Negotiation path registration works similarly: declaring Propose/Deliberate/Resolve configuration automatically provisions the corresponding UI (proposal forms, voting interfaces, discussion threads) and resolution logic.
+
+
+\subsubsection{Examples}
+
+Figure~\ref{fig:protocol-examples} shows two complete function declarations.
+
+% ─── FIGURE: Protocol Examples ───
+\begin{figure*}[t]
+\centering
+\fbox{\parbox{0.95\textwidth}{\centering\vspace{4cm}
+\textbf{Figure: Two Function Declarations}\\[0.5em]
+\small
+\textbf{Left: check-drift (AI-powered).} Target: Section. Trigger: ambient. Executor: prompt with \texttt{focusPrompt} fill-config. Output: coverage score + per-sentence alignment array. Display: Paragraph.Inline (sentence highlights by alignment) + IntentItem.Indicator (coverage value).\\[1em]
+\textbf{Right: check-heading-consistency (local).} Target: Section. Trigger: ambient. Executor: local function comparing heading text to intent content. Output: heading, intentContent, consistent boolean. Display: IntentItem.Indicator (warning icon when inconsistent) + Paragraph.Side (mismatch note).
+\vspace{4cm}}}
+\caption{Two function declarations through the Awareness Protocol. Left: an AI-powered drift detector that highlights sentence-level alignment in Writing View and shows coverage in Outline View. Right: a local consistency checker requiring no AI. Both use the same protocol, the same data model, and the same view layer slots.}
+\label{fig:protocol-examples}
+\end{figure*}
+
+
+\subsubsection{Built-in Capabilities}
+\label{sec:built-in}
+
+Based on the design space in Section~\ref{sec:framework}, we pre-define capabilities for each stage of the coordination loop. These are registered through the same protocol as third-party extensions---we are the first users of our own protocol, not a privileged layer.
+
+\paragraph{Awareness Functions} are cognitive support capabilities that help writers and teams sense, understand, and evaluate relationship changes in the negotiation space. They are not limited to the pre-Gate phase---at any point in the coordination loop where understanding relationship state is needed, an awareness function can be triggered. A function can be mounted on writing actions (editing an intent, completing a paragraph) or on Negotiation Path nodes (assisting participants during Deliberate).
+
+We organize our built-in functions by the cognitive need they serve:
+
+\textbf{Sensing relationship state}---helping writers continuously understand their position in the negotiation space:
+\begin{itemize}[leftmargin=1.5em, itemsep=1pt]
+\item \textbf{check-drift} (Writing $\leftrightarrow$ Intent, Writing $\leftrightarrow$ BNA): Continuously detects whether writing covers intent and aligns with team direction. Highlights drifted sentences in Writing View, shows coverage in Outline View. The most fundamental cognitive need: \emph{what is the relationship between what I wrote and what the team agreed?}
+\item \textbf{check-cross-consistency} (Writing $\leftrightarrow$ Others): Detects whether my writing is consistent with others' writing through dependency chains. When Alice revises the research question, this function alerts Bob that his Method section may need adjustment.
+\item \textbf{discover-dependencies} (BNA internal): Analyzes outline structure to discover and suggest implicit dependencies between intent units. Runs during Setup and after outline changes.
+\end{itemize}
+
+\textbf{Assessing impact}---helping writers understand the consequences of a potential change, providing data for Gate threshold decisions:
+\begin{itemize}[leftmargin=1.5em, itemsep=1pt]
+\item \textbf{assess-change-impact} (Scope, Severity, Propagation): Evaluates the impact of modifying or deleting an intent---which sections are affected, how significant the impact is, how far it propagates through dependency chains. Output directly feeds Gate threshold evaluation.
+\item \textbf{preview-change-on-writing} (Propagation): Projects a potential modification onto affected sections, showing a diff of how existing writing would change. Writers use it to evaluate ``should I propose this?''; participants in Deliberate use it to understand ``what does this proposal mean for my writing?''---the same function serving different cognitive needs at different stages.
+\end{itemize}
+
+\textbf{Supporting the negotiation process}---providing cognitive support during Propose, Deliberate, and Resolve:
+\begin{itemize}[leftmargin=1.5em, itemsep=1pt]
+\item \textbf{suggest-intent-for-orphan}: When a writer produces content outside any intent, suggests creating a new IntentItem.
+\item \textbf{frame-proposal}: Automatically organizes proposal context---attaches impact analysis, links to related past resolutions, lists affected parties.
+\item \textbf{preview-alternatives}: During Deliberate, compares multiple proposed alternatives side-by-side showing their impact on writing.
+\item \textbf{preview-resolution-effect}: During Resolve, previews the final state of BNA and writing if the proposal is accepted.
+\end{itemize}
+
+
+\paragraph{Negotiation Paths} define the procedural rules of negotiation---who participates, how they deliberate, what counts as resolution. Each path comes with default-mounted Awareness Functions that provide cognitive support at key nodes. Teams can enable or disable these defaults to prevent excessive detection.
+
+\begin{table}[t]
+\small
+\caption{Built-in Negotiation Paths with default-mounted Awareness Functions.}
+\label{tab:negotiation-paths}
+\begin{tabular}{@{}lllp{3.5cm}@{}}
+\toprule
+\textbf{Path} & \textbf{Mechanism} & \textbf{Criteria} & \textbf{Default Functions} \\
+\midrule
+Inform & Notify & Immediate & assess-change-impact \\
+Ask for Input & Solicit & Single-approval & assess-change-impact, preview-change-on-writing \\
+Team Vote & Voting & Majority & frame-proposal, preview-change-on-writing, preview-resolution-effect \\
+Discussion & Threaded & Proposer-closes & frame-proposal, preview-alternatives \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent For example, the Team Vote path defaults to running \texttt{frame-proposal} at Propose (auto-organizing context), \texttt{preview-change-on-writing} at Deliberate (showing voters the impact), and \texttt{preview-resolution-effect} before Resolve (letting the team preview the outcome). Teams can disable any of these---a small team might turn off \texttt{preview-resolution-effect} as unnecessary overhead.
+
+All capabilities are registered through the protocol, not hardcoded. As the community contributes new functions (terminology consistency checkers, citation validators, formatting harmonizers) and new paths, teams select from an expanding pool.
+
+
+\subsection{Team Interface}
+\label{sec:team-interface}
+
+\subsubsection{Setup: Defining the Coordination Pipeline}
+\label{sec:setup}
+
+Before writing begins, teams define their coordination pipeline through a guided Setup interface. This process resembles teams authoring their own MetaRule---selecting which capabilities to activate, configuring Gate thresholds, and choosing Negotiation Paths.
+
+The Setup interface presents questions organized around the pre-defined capabilities:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=1pt]
+\item \textbf{Awareness}: Enable check-drift? If so, what should the checker focus on? (configures \texttt{focusPrompt}). Enable cross-consistency checking? Enable dependency discovery?
+\item \textbf{Gate}: What level of drift should notify the team? (configures Severity threshold). Auto-trigger when others are affected, or let writers decide? (configures Scope threshold + Agency).
+\item \textbf{Negotiation}: How should intent modifications be decided? (selects Path). Who participates? (configures Participation). How long before timeout? (configures deadline).
+\end{itemize}
+
+\noindent After answering, the system generates a visual coordination pipeline---the complete Awareness $\rightarrow$ Gate $\rightarrow$ Negotiation flow, showing which functions and paths are active at each node. Most teams can start writing immediately. Teams wanting finer control can click any node in the pipeline to adjust configuration.
+
+% ─── FIGURE: Setup ───
+\begin{figure}[t]
+\centering
+\fbox{\parbox{0.95\columnwidth}{\centering\vspace{2.5cm}
+\textbf{Figure: Setup Interface}\\[0.5em]
+\small Left: guided questions organized by Awareness / Gate / Negotiation. Right: generated coordination pipeline (editable). Nodes show active functions and paths.
+\vspace{2.5cm}}}
+\caption{The Setup interface. Teams answer questions about their collaboration context; the system generates a visual coordination pipeline that can be further customized.}
+\label{fig:setup}
+\end{figure}
+
+
+\subsubsection{Writing and Coordination}
+
+Once configured, all interfaces load adaptively based on the team's pipeline: which functions are active determines what annotations appear in Outline View and Writing View; which path is selected determines what interaction the coordination interface provides (voting, discussion, silent approval). The interface the team sees is the direct embodiment of the pipeline they defined in Setup.
+
+
+\subsubsection{Configuration Examples}
+\label{sec:config-examples}
+
+Two examples show how different teams use Setup to define fundamentally different coordination pipelines (Figure~\ref{fig:pipeline-comparison}).
+
+\paragraph{Example 1: Two co-authors, synchronous blog post.} Setup: enable check-drift (focusPrompt: ``check overall argument flow''), disable cross-consistency; Gate: fundamental severity only; Path: Inform; Participation: all.
+
+\noindent \textbf{Generated pipeline}: Writing $\rightarrow$ check-drift (ambient, loose) $\rightarrow$ Gate: severity $\geq$ fundamental $\rightarrow$ Inform (notify, no response needed). \emph{Effect}: Lightweight awareness, loose gate. Outline View shows basic coverage; Writing View highlights only directional drift. Most changes resolve in personal space through conversation.
+
+\paragraph{Example 2: Five co-authors, asynchronous academic paper.} Setup: enable check-drift (focusPrompt: ``check argument structure and evidence alignment''), enable cross-consistency and dependency discovery; Gate: local + specific triggers; Path: Team Vote (majority, 48h); Participation: direct dependents.
+
+\noindent \textbf{Generated pipeline}: Writing $\rightarrow$ check-drift (strict) + check-cross-consistency $\rightarrow$ Gate: severity $\geq$ local AND scope $\geq$ specific $\rightarrow$ Team Vote [Propose: frame-proposal; Deliberate: preview-change-on-writing + preview-alternatives; Resolve: majority, 48h, preview-resolution-effect] $\rightarrow$ Update BNA $\rightarrow$ re-trigger awareness. \emph{Effect}: Fine-grained awareness, strict gate, formal voting. Full annotation in both views; Deliberate shows diffs and alternative comparisons automatically.
+
+% ─── FIGURE: Pipeline Comparison ───
+\begin{figure*}[t]
+\centering
+\fbox{\parbox{0.95\textwidth}{\centering\vspace{3cm}
+\textbf{Figure: Two Team Pipelines}\\[0.5em]
+\small Left: lightweight pipeline (two-person blog)---two nodes (check-drift $\rightarrow$ Inform), minimal annotations. Right: full pipeline (five-person paper)---multiple nodes with branching (check-drift + cross-consistency $\rightarrow$ strict Gate $\rightarrow$ Team Vote with frame-proposal, preview, and resolution preview), rich annotations in both views.
+\vspace{3cm}}}
+\caption{The same design space produces fundamentally different coordination pipelines. Left: a two-person synchronous team with lightweight awareness and informal negotiation. Right: a five-person distributed team with fine-grained awareness, strict gate thresholds, and formal voting with AI-assisted cognitive support at each negotiation stage.}
+\label{fig:pipeline-comparison}
+\end{figure*}

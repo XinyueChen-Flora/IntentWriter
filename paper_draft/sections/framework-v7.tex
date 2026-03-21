@@ -1,0 +1,255 @@
+\section{Design Space for Coordination in Collaborative Writing}
+\label{sec:framework}
+
+We propose to reconceive collaborative writing as a process of negotiation around team shared understanding. Current tools treat writing itself as the sole medium of collaboration---all coordination happens in the text stream, through track changes, comments, and ad hoc communication. We propose a different structure: teams maintain a shared understanding representation (BNA) independent of the writing itself; individual writing proceeds within the framework of this shared understanding; and when the shared understanding needs to change, the team negotiates through an explicit pipeline.
+
+This section first defines BNA and the relationships between BNA and writing that form a \emph{negotiation space} (\S\ref{sec:bna}), then defines the coordination design space that operates on this negotiation space (\S\ref{sec:design-space}).
+
+
+\subsection{BNA and the Negotiation Space}
+\label{sec:bna}
+
+\subsubsection{BNA in Collaborative Writing}
+
+Lee's Boundary Negotiating Artifact (BNA)~\cite{lee2007boundary} describes a phenomenon in non-routine collaboration: when no pre-established standards exist, participants create artifacts that establish and evolve consensus---artifacts that do not passively carry information but actively participate in negotiation. Collaborative writing is exactly such a setting: every project requires teams to build and continuously maintain consensus about ``what we are writing.''
+
+We apply BNA to collaborative writing, defining it as the externalized structure of team shared understanding---the consensus about ``what to write'' that the team collectively follows. With this structure, writing acts gain coordination meaning relative to team consensus; implicit cross-section relationships become trackable; negotiation can happen at the intent level rather than the sentence level; and awareness and negotiation have concrete anchors.
+
+To serve these roles, a BNA must satisfy five conditions:
+
+\begin{description}[leftmargin=1.5em, nosep, itemsep=3pt]
+\item[C1: Composed of intent units.] The basic unit of BNA is an \emph{intent unit}---each expressing the team's consensus about what a part of the document ``should convey.'' Intent units are more abstract than specific writing, allowing different implementations while enabling negotiation at the intent level.
+
+\item[C2: Has internal dependency structure.] Intent units have explicit dependencies (depends-on, supports, must-be-consistent). These dependencies are implicit in prose---BNA makes them visible, enabling cross-section impact tracking.
+
+\item[C3: Has ownership.] Each intent unit has a designated owner, giving coordination a concrete addressee.
+
+\item[C4: Traceable to writing.] BNA and writing maintain a traceable correspondence. At any moment, one can answer ``has this intent been realized?'' Without this traceability, BNA is a dead checklist.
+
+\item[C5: Dynamically negotiable.] BNA is not a fixed plan but a continuously evolving shared understanding. Team members can propose modifications, but modifications require negotiation---this is why the pipeline exists.
+\end{description}
+
+
+\subsubsection{Concrete Forms of BNA}
+
+BNA satisfying C1--C5 can take different concrete forms. Two examples illustrate how intent units, dependencies, and ownership look in different writing contexts.
+
+\paragraph{Example 1: Living Outline.} A team co-writes an academic paper. Their BNA is a living outline where each entry is an intent unit:
+
+\begin{table}[h]
+\small
+\begin{tabular}{@{}llp{5.5cm}l@{}}
+\toprule
+\textbf{ID} & \textbf{Intent} & \textbf{Description} & \textbf{Owner} \\
+\midrule
+I1 & Introduction & Motivate the coordination problem with a real scenario & Alice \\
+I2 & Research Q. & State how to provide coordination infrastructure for CW & Alice \\
+I3 & System Design & Justify the living outline as externalized consensus & Bob \\
+I4 & Evaluation & Report deployment study methods and findings & Carol \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Dependencies: I3 \emph{depends-on} I2 (system design must respond to the research question); I4 \emph{must-be-consistent} I3 (evaluation must correspond to system design). If Alice revises the research question I2, Bob's system design I3 may need adjustment---a dependency invisible in prose but explicit in BNA.
+
+\paragraph{Example 2: Argument Map.} A team co-writes a policy recommendation. Their BNA is an argument map where each node is an intent unit:
+
+\begin{table}[h]
+\small
+\begin{tabular}{@{}llp{4.5cm}ll@{}}
+\toprule
+\textbf{ID} & \textbf{Intent} & \textbf{Description} & \textbf{Type} & \textbf{Owner} \\
+\midrule
+C1 & Main claim & AI systems need mandatory transparency & claim & Alice \\
+E1 & Evidence & EU AI Act implementation data & evidence & Bob \\
+C2 & Counter & Excessive transparency harms competitiveness & counter & Carol \\
+E2 & Evidence & Tech company feedback surveys & evidence & Carol \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Dependencies: E1 \emph{supports} C1; C2 \emph{challenges} C1; E2 \emph{supports} C2. Both forms differ in structure but satisfy C1--C5.
+
+% ─── FIGURE: Two BNA Forms ───
+\begin{figure}[t]
+\centering
+\fbox{\parbox{0.95\columnwidth}{\centering\vspace{2cm}
+\textbf{Figure: Two BNA Forms}\\[0.5em]
+\small Living outline (left) and argument map (right), each showing intent units with dependency edges and ownership annotations. Both satisfy C1--C5 despite different structures.
+\vspace{2cm}}}
+\caption{Two concrete forms of BNA. A living outline (left) organizes intent units hierarchically with typed dependencies; an argument map (right) organizes them as claims, evidence, and counter-claims with support/challenge edges. Both externalize team consensus and make cross-section dependencies explicit.}
+\label{fig:bna-forms}
+\end{figure}
+
+
+\subsubsection{The Negotiation Space}
+
+BNA, Writing, and the relationships between them form the \textbf{negotiation space} of collaborative writing---the foundation on which coordination operates.
+
+BNA is the team's shared understanding---consensus about ``what to write.'' Writing is the individual's realization of this consensus. Previously, both were entangled in the same document. With BNA, shared understanding has its own carrier, and writing returns to the individual's implementation space.
+
+Four types of relationships exist in the negotiation space:
+
+\begin{description}[leftmargin=1.5em, nosep, itemsep=3pt]
+\item[BNA $\leftrightarrow$ BNA:] Dependencies between intent units. I3 \emph{depends-on} I2; E1 \emph{supports} C1. These make the document's structural logic explicit.
+
+\item[BNA $\rightarrow$ Writing:] Shared understanding guides individual writing. Each intent unit defines expectations for the corresponding writing. Bob writes the system design following I3's intent; how he writes it is his freedom.
+
+\item[Writing $\rightarrow$ BNA:] Writing feeds back to shared understanding. While writing, the relationship between content and intent continuously changes---drifting, discovering new angles, finding an intent no longer appropriate.
+
+\item[Writing $\leftrightarrow$ Writing:] Indirect relationship through BNA. Alice's Introduction and Bob's Method appear independent in the text stream, but because I3 \emph{depends-on} I2, Alice's revision to the research question propagates to Bob's system design. This relationship is invisible in prose but trackable through BNA.
+\end{description}
+
+\noindent Changes in these relationships are coordination triggers. With trackable relationships, it becomes possible to build a coordination pipeline on top of them.
+
+% ─── FIGURE: Negotiation Space ───
+\begin{figure*}[t]
+\centering
+\fbox{\parbox{0.95\textwidth}{\centering\vspace{3cm}
+\textbf{Figure: The Negotiation Space}\\[0.5em]
+\small BNA (left, team shared understanding) and Writing (right, individual realization) connected through four types of relationships. (1) Internal dependencies between intent units. (2) Intent guides writing. (3) Writing feeds back to intent. (4) Writing sections are indirectly related through intent dependencies---invisible in text but explicit through BNA.
+\vspace{3cm}}}
+\caption{The negotiation space. BNA and Writing form two layers connected by four types of relationships. The BNA externalizes team consensus and makes the structural logic of the document explicit; Writing is the individual realization of this consensus. Changes in these relationships trigger coordination.}
+\label{fig:negotiation-space}
+\end{figure*}
+
+
+\subsection{Coordination Design Space}
+\label{sec:design-space}
+
+Section~\ref{sec:bna} defined the negotiation space: BNA externalizes team consensus, Writing is the individual realization, and four types of relationships connect them. Current tools lack this space---track changes records who changed which words, but no one knows how those changes relate to team consensus.
+
+BNA enables coordination through a core mechanism: it lets writers \emph{navigate between intent (abstract) and writing (concrete)}. A writer can start from their writing and understand its position relative to intent; or start from intent and project a modification into writing, seeing its concrete impact on themselves and others. This bidirectional navigation between abstract and concrete does not exist in scroll-bound text---it is the foundational capability BNA provides for coordination.
+
+Based on this capability, we define the coordination design space (Figure~\ref{fig:pipeline}). Writers compose in personal space; \textbf{Awareness} continuously senses changes in the relationships between writing and BNA; when changes reach a team-configured threshold, the writer crosses the \textbf{Gate} into team space; \textbf{Negotiation} updates the BNA through Propose $\rightarrow$ Deliberate $\rightarrow$ Resolve; the updated BNA feeds back into writing and awareness---forming a continuous coordination loop.
+
+% ─── FIGURE: Coordination Pipeline ───
+\begin{figure*}[t]
+\centering
+\fbox{\parbox{0.95\textwidth}{\centering\vspace{3cm}
+\textbf{Figure: Coordination Pipeline}\\[0.5em]
+\small Top layer: BNA (team consensus) + Writing (individual). Loop: Writing (personal space) $\rightarrow$ Awareness (sense relationship changes) $\rightarrow$ Gate (threshold) $\rightarrow$ Negotiation (team space: Propose $\rightarrow$ Deliberate $\rightarrow$ Resolve) $\rightarrow$ Update BNA $\rightarrow$ back to Writing. Gate is a threshold condition between Awareness and Negotiation, not an independent stage. Awareness dimensions marked $\bigstar$ form the Gate condition.
+\vspace{3cm}}}
+\caption{The coordination pipeline. Awareness operates in personal space, continuously sensing the writer's relationship to team consensus. When $\bigstar$-marked dimensions (Scope, Severity, Group Interest) exceed a team-configured threshold, the Gate triggers entry into team space for Negotiation. The loop cycles continuously: writing changes relationships, awareness detects changes, negotiation updates BNA, updated BNA reshapes awareness.}
+\label{fig:pipeline}
+\end{figure*}
+
+
+\subsubsection{Awareness}
+\label{sec:awareness}
+
+BNA externalizes the otherwise implicit relationships between writing and team consensus, enabling writers to perceive their position in the negotiation space. The Awareness design space has three groups of dimensions.
+
+\paragraph{When --- triggering awareness.}
+
+\begin{table}[h]
+\small
+\begin{tabular}{@{}lp{2.5cm}p{4cm}@{}}
+\toprule
+\textbf{Dimension} & \textbf{Design Question} & \textbf{Option Space} \\
+\midrule
+Trigger & What triggers awareness & Ambient, on-demand, post-action, external (others' changes) \\
+Timing & Before or after writing & Pre-action (check alignment before writing), post-action (review drift after writing) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{What --- sensing relationship changes.}
+
+\begin{table}[h]
+\small
+\begin{tabular}{@{}lp{2cm}p{4.5cm}@{}}
+\toprule
+\textbf{Dimension} & \textbf{Design Question} & \textbf{Option Space} \\
+\midrule
+Writing $\leftrightarrow$ Intent & My writing vs.\ my intent & Covered, partial, deviated, extended, orphan \\
+Writing $\leftrightarrow$ BNA & My writing vs.\ team consensus & Aligned, in tension, diverged \\
+Writing $\leftrightarrow$ Others & My writing vs.\ others' (via deps) & Unrelated, linked, potential conflict, conflict \\
+Decision History & Past resolutions constrain? & Unconstrained, constrained by prior resolution \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Impact $\bigstar$ Gate --- assessing consequences.}
+
+\begin{table}[h]
+\small
+\begin{tabular}{@{}lp{2cm}p{4.5cm}@{}}
+\toprule
+\textbf{Dimension} & \textbf{Design Question} & \textbf{Option Space} \\
+\midrule
+Scope $\bigstar$ & Who is affected & None, specific (via deps), team-wide \\
+Severity $\bigstar$ & How significant & Cosmetic, local, directional, fundamental \\
+Propagation & How it spreads & Only my intent, direct dependents, multi-level chain \\
+Group Interest $\bigstar$ & Does team need to know & Need-to-know, want-to-know, won't care, unknown \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Dimensions marked $\bigstar$ jointly form the \textbf{Gate}: when their combination reaches a team-configured threshold, the writer transitions from personal space to team space. Different teams set different thresholds---a high-trust pair may trigger only on \emph{fundamental} + \emph{team-wide}; a high-stakes distributed team may trigger on \emph{local} + \emph{specific}. The Gate can be crossed proactively by the writer or automatically when the system detects the threshold is exceeded.
+
+
+\subsubsection{Negotiation}
+\label{sec:negotiation}
+
+After crossing the Gate, negotiation targets the team's shared understanding. The following dimensions define the Negotiation design space:
+
+\paragraph{Propose --- initiating a BNA modification.}
+
+\begin{table}[h]
+\small
+\begin{tabular}{@{}lp{2cm}p{4.5cm}@{}}
+\toprule
+\textbf{Dimension} & \textbf{Design Question} & \textbf{Option Space} \\
+\midrule
+Initiation & Who/what initiates & Writer, system-suggested, owner-only \\
+Scope & What can be proposed & Modify intent, add/delete intent, adjust dependency, reassign \\
+Framing & What context accompanies & Impact analysis, affected parties, writing preview, decision history \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Deliberate --- affected parties review.}
+
+\begin{table}[h]
+\small
+\begin{tabular}{@{}lp{2cm}p{4.5cm}@{}}
+\toprule
+\textbf{Dimension} & \textbf{Design Question} & \textbf{Option Space} \\
+\midrule
+Participation & Who participates & Direct dependents, all owners, all members \\
+Mechanism & How they deliberate & Voting, threaded discussion, synchronous meeting, silent approval (timeout = consent) \\
+Visibility & What participants see & Impact on their intents/writing, others' opinions, similar past decisions \\
+Response & How to express opinion & Approve, reject, counter-propose, defer, request more info \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Resolve --- reaching a decision.}
+
+\begin{table}[h]
+\small
+\begin{tabular}{@{}lp{2cm}p{4.5cm}@{}}
+\toprule
+\textbf{Dimension} & \textbf{Design Question} & \textbf{Option Space} \\
+\midrule
+Criteria & What counts as decided & Unanimous, majority, stakeholder agreement, proposer decides \\
+Fallback & If not resolved & Maintain status quo, escalate, auto-resolve after timeout, split into sub-decisions \\
+Outcome & How it takes effect & Update BNA, notify affected parties, record decision history, trigger awareness recomputation \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\subsubsection{Defining a Coordination Pipeline with the Design Space}
+\label{sec:pipeline-examples}
+
+These dimensions define the coordination design space for collaborative writing. Teams select values across these dimensions to define their own coordination pipeline. Two examples show how the same design space supports fundamentally different coordination approaches.
+
+\paragraph{Example 1: Two co-authors writing a blog post synchronously.} Alice and Bob brainstorm face-to-face with a simple living outline as BNA. They configure: Trigger = ambient; Gate = fundamental + team-wide only; Group Interest = default won't-care; Mechanism = synchronous discussion; Criteria = proposer-decides. Lightweight awareness, loose gate, instant negotiation. Most changes resolve in personal space; only directional shifts cross to team space.
+
+\paragraph{Example 2: Five co-authors writing an academic paper asynchronously.} Distributed across three time zones, with a structured living outline and explicit dependencies. They configure: Trigger = post-action; full relationship tracking including Writing $\leftrightarrow$ Others; Gate = local + specific triggers; Group Interest = default need-to-know; Mechanism = voting with 48-hour deadline; Participation = direct dependents; Criteria = stakeholder agreement; Fallback = timeout maintains status quo, escalate to all. Fine-grained awareness, strict gate, formal voting. The system proactively detects drift and suggests initiating negotiation.
+
+\paragraph{Awareness is continuous.} Awareness operates not only before the Gate. The dimensions defined in \S\ref{sec:awareness}---relationship changes, impact scope, group interest---are needed at every stage of the coordination loop: during writing, when exploring potential changes, during Deliberate (participants need to understand how a proposal affects their writing), and after Resolve (re-sensing the updated relationship state). Before the Gate, awareness serves the question ``should I cross to team space?''; after the Gate, it serves cognition and decision-making within the negotiation process.
+
+The design space is AI-agnostic: without AI, teams can manually check writing-intent relationships, manually judge impact, and negotiate face-to-face; with AI, the cost of perception and judgment at each dimension drops substantially, but the framework itself does not depend on AI.
