@@ -4,8 +4,7 @@ import type { IntentBlock, WritingBlock, OnlineUser, RoomMeta, IntentDependency 
 import type { DocumentMember } from "@/lib/types";
 import type { User } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
-import { Plus, ArrowRight } from "lucide-react";
-import { AutoResizeTextarea } from "@/components/ui/AutoResizeTextarea";
+import { Plus } from "lucide-react";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import ImportMarkdownDialog from "./ImportMarkdownDialog";
 import {
@@ -22,13 +21,18 @@ import {
 import { useIntentDragDrop } from '@/hooks/useIntentDragDrop';
 import { useIntentHierarchy } from '@/hooks/useIntentHierarchy';
 import { useDependencyLinks } from '@/hooks/useDependencyLinks';
-import { useDriftDetection, type SentenceAnchor } from '@/hooks/useDriftDetection';
-import type { IntentProposal, ProposalDraft, DraftItem } from './IntentPanelContext';
+import { usePipelineRuntime, metaRuleToPipelineConfig } from '@/hooks/usePipelineRuntime';
+import { EMPTY_PIPELINE_CONFIG } from '@/lib/metarule-types';
+import { primitivesToTipTapHighlights, primitivesToAlignedIntents, type SentenceAnchor } from '@/lib/primitive-to-tiptap';
+import type { DocumentSnapshot } from '@/platform/data-model';
+import type { ProposalDraft, DraftItem } from './IntentPanelContext';
+import { getAllSenseProtocols } from '@/platform/sense/protocol';
+import { resolveBindings, type ResolvedPrimitive } from '@/platform/primitives/resolver';
 
 // Import extracted components
 import { SortableBlockItem } from './ui/SortableBlockItem';
 import { IntentBlockCard } from './IntentBlockCard';
-import { IntentPanelProvider, type ActiveDiffSession, type WritingPreview, type SectionImpactData } from './IntentPanelContext';
+import { IntentPanelProvider } from './IntentPanelContext';
 import { StartOutlineGuide } from './onboarding';
 import {
   SetupTabBar,
@@ -76,69 +80,6 @@ type IntentPanelProps = {
   onStartWriting?: () => void;
   onBackToSetup?: () => void;
 };
-
-// ─── Propose New Section (writing phase) ─────────────────────────────────
-
-function ProposeNewSection({ onPropose }: { onPropose: (proposal: IntentProposal) => void }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [draft, setDraft] = useState("");
-
-  const handleSubmit = () => {
-    const trimmed = draft.trim();
-    if (!trimmed) return;
-    onPropose({
-      type: 'add',
-      intentId: '__root__', // special marker: new top-level section
-      content: trimmed,
-    });
-    setIsOpen(false);
-    setDraft("");
-  };
-
-  if (isOpen) {
-    return (
-      <div className="mt-4 border border-emerald-400 dark:border-emerald-500 rounded-lg px-3 py-2 bg-emerald-50/20 dark:bg-emerald-950/20 shadow-sm">
-        <AutoResizeTextarea
-          value={draft}
-          onChange={setDraft}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') { setIsOpen(false); setDraft(""); }
-          }}
-          placeholder="New section title..."
-          className="w-full px-2 py-1.5 text-sm bg-white dark:bg-background border border-emerald-300 dark:border-emerald-700 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-400/50"
-          minRows={1}
-          autoFocus
-        />
-        <div className="flex items-center gap-2 mt-1.5">
-          <button
-            onClick={handleSubmit}
-            disabled={!draft.trim()}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/50 hover:bg-blue-100 dark:hover:bg-blue-900/50 disabled:opacity-40 border border-blue-200 dark:border-blue-800 rounded-md transition-colors"
-          >
-            <ArrowRight className="h-3 w-3" />
-            How does this affect other sections?
-          </button>
-          <button
-            onClick={() => { setIsOpen(false); setDraft(""); }}
-            className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <button
-      onClick={() => setIsOpen(true)}
-      className="mt-4 flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors pl-1"
-    >
-      <Plus className="h-4 w-4" />
-      <span>Propose new section</span>
-    </button>
-  );
-}
 
 // ─── Main component ─────────────────────────────────────────────────────
 
@@ -196,23 +137,6 @@ export default function IntentPanel({
     setHandledOrphanStarts(prev => new Set(prev).add(orphanStart));
   }, []);
 
-  // Pending writing suggestion (Intent → Writing simulation)
-  const [pendingWritingSuggestion, setPendingWritingSuggestion] = useState<{
-    intentId: string;
-    rootIntentId: string;
-    intentContent: string;
-    suggestedContent: string;
-  } | null>(null);
-
-  // Pending intent suggestion (Writing → Intent simulation)
-  const [pendingIntentSuggestion, setPendingIntentSuggestion] = useState<{
-    intentId: string;
-    rootIntentId: string;
-    currentContent: string;
-    suggestedContent: string;
-    relatedImpacts?: Array<{ id: string; content: string; impact: string }>;
-    isLoadingImpact?: boolean;
-  } | null>(null);
 
   // Track intents that have AI-generated content (shown with AI badge)
   const [aiCoveredIntents, setAiCoveredIntents] = useState<Set<string>>(new Set());
@@ -229,8 +153,6 @@ export default function IntentPanel({
     });
   }, []);
 
-  // Active diff session - for cross-section inline diff display
-  const [activeDiffSession, setActiveDiffSession] = useState<ActiveDiffSession | null>(null);
 
   // Proposal draft — editing state before simulation
   const [proposalDraft, setProposalDraft] = useState<ProposalDraft | null>(null);
@@ -240,6 +162,16 @@ export default function IntentPanel({
   const [viewingProposalForSectionId, setViewingProposalForSectionId] = useState<string | null>(null);
   const [viewingProposalAffectedSectionId, setViewingProposalAffectedSectionId] = useState<string | null>(null);
   const [expandedThreadProposalId, setExpandedThreadProposalId] = useState<string | null>(null);
+
+  // Active review — reviewer enters deliberate stage
+  const [activeReview, setActiveReview] = useState<{
+    proposalId: string; pathId: string; sectionId: string;
+    notification: import('./IntentPanelContext').SectionNotification;
+  } | null>(null);
+  const startReview = useCallback((proposalId: string, pathId: string, sectionId: string, notification: import('./IntentPanelContext').SectionNotification) => {
+    setActiveReview({ proposalId, pathId, sectionId, notification });
+  }, []);
+  const clearReview = useCallback(() => setActiveReview(null), []);
 
   // ─── Proposals & section notifications ───
   type ProposalRecord = {
@@ -276,9 +208,15 @@ export default function IntentPanel({
       .catch(console.error);
   }, [roomId]);
 
-  // Fetch proposals on mount and when phase changes
+  // Fetch proposals on mount, when phase changes, and poll every 10s
   useEffect(() => {
     if (!isSetupPhase) refreshProposals();
+  }, [isSetupPhase, refreshProposals]);
+
+  useEffect(() => {
+    if (isSetupPhase) return;
+    const interval = setInterval(refreshProposals, 10000);
+    return () => clearInterval(interval);
   }, [isSetupPhase, refreshProposals]);
 
   // Auto-open ProposalViewer for 'notify' level notifications on entry
@@ -334,8 +272,8 @@ export default function IntentPanel({
         // Fallback: derive from impact level when notify_levels not stored
         // Use MetaRule's default notify level when available
         if (notifyLevel === 'skip' && impact) {
-          const metaDefault = roomMeta?.metaRule?.coordination?.decided?.defaultNotifyLevel;
-          notifyLevel = impact.impactLevel === 'significant' ? 'notify' : (metaDefault || 'heads-up');
+          const metaDefault = roomMeta?.metaRule?.defaultNotifyLevel ?? 'heads-up';
+          notifyLevel = impact.impactLevel === 'significant' ? 'notify' : metaDefault;
         }
 
         // For negotiate types, default to 'notify' even without impact data
@@ -369,6 +307,9 @@ export default function IntentPanel({
           reason: impact ? impact.reason : 'General team update',
           personalNote: personalNotes[sectionId] || undefined,
           suggestedChanges: impact?.suggestedChanges,
+          // Proposer's original changes and reasoning
+          sourceChanges: p.source_changes || [],
+          reasoning: p.reasoning || '',
           createdAt: p.created_at,
           acknowledged: !!userVote,
         }];
@@ -389,38 +330,24 @@ export default function IntentPanel({
         ...(rootBlock ? [{
           id: rootBlock.id,
           content: rootBlock.content,
-          originalContent: rootBlock.previousContent || rootBlock.content,
-          isNew: rootBlock.changeStatus === 'added',
-          isRemoved: rootBlock.changeStatus === 'removed',
-          priorChangeStatus: rootBlock.changeStatus as DraftItem['priorChangeStatus'],
-          priorChangeBy: rootBlock.changeByName,
-          priorChangeAt: rootBlock.changeAt,
+          originalContent: rootBlock.content, // Always use CURRENT content as baseline
+          isNew: false,
+          isRemoved: false,
         }] : []),
-        // Children — reflect existing change status
-        ...children.map(child => ({
+        // Children — use current state as baseline
+        ...children.filter(c => c.changeStatus !== 'removed').map(child => ({
           id: child.id,
           content: child.content,
-          originalContent: child.previousContent || child.content,
-          isNew: child.changeStatus === 'added',
-          isRemoved: child.changeStatus === 'removed',
-          priorChangeStatus: child.changeStatus as DraftItem['priorChangeStatus'],
-          priorChangeBy: child.changeByName,
-          priorChangeAt: child.changeAt,
+          originalContent: child.content, // Current content is the baseline
+          isNew: false,
+          isRemoved: false,
         })),
       ];
       setProposalDraft({ rootIntentId, action, draftItems, triggerIntentId });
     } else {
       setProposalDraft({ rootIntentId, action, comment: '', triggerIntentId });
     }
-    // Clear any existing diff session
-    setActiveDiffSession(null);
   }, [blocks]);
-
-  // Get impact data for a specific section
-  const getSectionImpact = useCallback((sectionId: string) => {
-    if (!activeDiffSession) return undefined;
-    return activeDiffSession.sectionImpacts.get(sectionId);
-  }, [activeDiffSession]);
 
   // Refs for SVG dependency lines
   const containerRef = useRef<HTMLDivElement>(null);
@@ -459,13 +386,145 @@ export default function IntentPanel({
     return map;
   }, [writingBlocks]);
 
-  // Drift detection hook
-  const drift = useDriftDetection({
-    blocks,
-    dependencies,
-    markdownExporters: markdownExporters || new Map(),
-    intentToWritingMap,
+  // ── Pipeline Runtime (replaces drift detection) ──
+  // Cache writing content from markdown exporters for snapshot
+  const [writingContentCache, setWritingContentCache] = useState<Map<string, string>>(new Map());
+  const exportersRef = useRef(markdownExporters);
+  exportersRef.current = markdownExporters;
+  const writingBlocksRef = useRef(writingBlocks);
+  writingBlocksRef.current = writingBlocks;
+
+  // Refresh writing cache periodically — uses refs to avoid effect restarts
+  useEffect(() => {
+    async function refreshCache() {
+      const exporters = exportersRef.current;
+      if (!exporters || exporters.size === 0) return;
+
+      const newCache = new Map<string, string>();
+      for (const [wbId, exporter] of exporters) {
+        try {
+          const content = await exporter();
+          if (content) {
+            const wb = writingBlocksRef.current.find(w => w.id === wbId);
+            if (wb?.linkedIntentId) {
+              newCache.set(wb.linkedIntentId, content);
+            }
+          }
+        } catch { /* skip */ }
+      }
+      setWritingContentCache(newCache);
+    }
+
+    // Initial refresh after a short delay (wait for editors to register exporters)
+    const initialTimer = setTimeout(refreshCache, 1000);
+    // Then refresh every 5 seconds
+    const timer = setInterval(refreshCache, 5000);
+    return () => { clearTimeout(initialTimer); clearInterval(timer); };
+  }, []); // empty deps — uses refs
+
+  const pipelineSnapshot = useMemo((): DocumentSnapshot | null => {
+    if (!roomId || !currentUser) return null;
+    const now = Date.now();
+    const userId = currentUser.id;
+    const attr = { userId, userName: currentUser.email || '', at: now };
+
+    // Build writing array from cached content (live from TipTap) or fallback to block content
+    const writing = writingBlocks
+      .filter(wb => wb.linkedIntentId)
+      .map(wb => {
+        const cachedContent = writingContentCache.get(wb.linkedIntentId!);
+        const text = cachedContent || wb.content || '';
+        return {
+          sectionId: wb.linkedIntentId!,
+          html: '',
+          text,
+          wordCount: text.split(/\s+/).filter(Boolean).length,
+          paragraphs: [],
+        };
+      });
+
+    return {
+      documentId: roomId,
+      currentUserId: userId,
+      phase: isSetupPhase ? 'setup' : 'writing',
+      nodes: blocks.map(b => ({
+        id: b.id,
+        content: b.content || '',
+        position: b.position ?? 0,
+        parentId: b.parentId || null,
+        level: b.parentId ? 1 : 0,
+        createdBy: attr,
+      })),
+      writing,
+      dependencies: (dependencies || []).map(d => ({
+        id: d.id,
+        fromId: d.fromIntentId,
+        toId: d.toIntentId,
+        type: d.relationshipType || 'supports',
+        label: d.label || '',
+        direction: 'directed' as const,
+        source: 'manual' as const,
+        confirmed: true,
+        createdBy: attr,
+      })),
+      assignments: [],
+      members: [{ userId, name: currentUser.email || '', role: 'owner' as const, joinedAt: now }],
+    };
+  }, [roomId, currentUser, blocks, writingBlocks, writingContentCache, dependencies, isSetupPhase]);
+
+  const pipelineConfig = useMemo(() => {
+    if (roomMeta?.metaRule) {
+      return metaRuleToPipelineConfig(roomMeta.metaRule);
+    }
+    return EMPTY_PIPELINE_CONFIG;
+  }, [roomMeta?.metaRule]);
+
+  const pipeline = usePipelineRuntime({
+    snapshot: pipelineSnapshot,
+    pipelineConfig,
+    sectionId: undefined,
   });
+
+  // Resolve sense protocol UI declarations
+  const senseProtocolUI = useMemo(() => {
+    const allResults: Record<string, unknown> = {};
+    // Gather all function results into a flat namespace
+    const results = pipeline.getAllResults();
+    for (const [fnId, result] of results) {
+      allResults[fnId] = result.data;
+      // Also spread top-level fields for template access
+      if (result.data && typeof result.data === 'object') {
+        for (const [key, value] of Object.entries(result.data as Record<string, unknown>)) {
+          allResults[key] = value;
+        }
+      }
+    }
+
+    const prims: ResolvedPrimitive[] = [];
+    const enabledSense = pipelineConfig.senseProtocols ?? {};
+    for (const protocol of getAllSenseProtocols()) {
+      const entry = enabledSense[protocol.id];
+      if (!entry || !entry.enabled) continue;
+      if (protocol.ui && protocol.ui.length > 0) {
+        const resolved = resolveBindings(protocol.ui, allResults);
+        prims.push(...resolved);
+      }
+    }
+    return prims;
+  }, [pipeline.getAllResults(), pipelineConfig.senseProtocols]);
+
+  // Derive TipTap bridge helpers from pipeline primitives
+  const getSentenceHighlights = useCallback((rootIntentId: string) => {
+    const editorPrims = pipeline.primitivesByLocation['writing-editor']
+      .filter(p => p.params.sectionId === rootIntentId || !p.params.sectionId);
+    return primitivesToTipTapHighlights(editorPrims);
+  }, [pipeline.primitivesByLocation]);
+
+  const getAlignedIntents = useCallback((rootIntentId: string) => {
+    const nodePrims = pipeline.primitivesByLocation['outline-node']
+      .filter(p => p.params.sectionId === rootIntentId || !p.params.sectionId);
+    return primitivesToAlignedIntents(nodePrims);
+  }, [pipeline.primitivesByLocation]);
 
   const handleAddBlock = () => {
     const newBlock = addBlock();
@@ -519,325 +578,6 @@ export default function IntentPanel({
     }
   }, []);
 
-  // Handle propose change from intent actions (enters simulate pipeline)
-  // Fetch writing preview for a section (called after impact assessment)
-  const fetchWritingPreview = useCallback(async (
-    sectionId: string,
-    sourceSectionId: string,
-    proposedChanges: Array<{ id: string; content: string; status: string }>,
-    impactMap: Map<string, SectionImpactData>,
-    writingContents: Record<string, string>,
-    currentSession: ActiveDiffSession,
-  ) => {
-    const isSource = sectionId === sourceSectionId;
-    const sectionBlock = blocks.find(b => b.id === sectionId);
-    if (!sectionBlock) return;
-
-    const currentChildren = blocks
-      .filter(b => b.parentId === sectionId)
-      .sort((a, b) => a.position - b.position);
-
-    // Build current outline
-    const currentOutline = currentChildren.map(c => ({ id: c.id, content: c.content }));
-
-    // Build changed outline
-    let changedOutline: Array<{ id: string; content: string; status: 'existing' | 'new' | 'modified' | 'removed' }>;
-
-    if (isSource) {
-      // For source section, apply proposedChanges directly
-      const changeMap = new Map(proposedChanges.map(c => [c.id, c]));
-      changedOutline = currentChildren.map(c => {
-        const change = changeMap.get(c.id);
-        if (change) {
-          return { id: c.id, content: change.content, status: change.status as any };
-        }
-        return { id: c.id, content: c.content, status: 'existing' as const };
-      });
-      // Add new items
-      proposedChanges
-        .filter(c => c.status === 'new')
-        .forEach(c => changedOutline.push({ id: c.id, content: c.content, status: 'new' }));
-    } else {
-      // For impacted sections, use suggestedChanges from impact data
-      const impact = impactMap.get(sectionId);
-      if (!impact) return;
-      const modifiedIds = new Set<string>();
-      const removedIds = new Set<string>();
-      (impact.suggestedChanges || []).forEach(sc => {
-        if (sc.action === 'modify' && sc.intentId) modifiedIds.add(sc.intentId);
-        if (sc.action === 'remove' && sc.intentId) removedIds.add(sc.intentId);
-      });
-
-      changedOutline = currentChildren.map(c => {
-        if (removedIds.has(c.id)) return { id: c.id, content: c.content, status: 'removed' as const };
-        const mod = impact.suggestedChanges?.find(sc => sc.intentId === c.id && sc.action === 'modify');
-        if (mod) return { id: c.id, content: mod.content, status: 'modified' as const };
-        return { id: c.id, content: c.content, status: 'existing' as const };
-      });
-      (impact.suggestedChanges || [])
-        .filter(sc => sc.action === 'add')
-        .forEach((sc, idx) => changedOutline.push({ id: `new-${idx}`, content: sc.content, status: 'new' }));
-    }
-
-    // Set loading state
-    setActiveDiffSession(prev => {
-      if (!prev) return prev;
-      const previews = new Map(prev.writingPreviews);
-      previews.set(sectionId, { isLoading: true, mode: undefined, currentPreview: '', changedPreview: '' });
-      return { ...prev, writingPreviews: previews };
-    });
-
-    try {
-      const response = await fetch('/api/preview-writing-impact', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sectionIntent: sectionBlock.content,
-          currentOutline,
-          changedOutline,
-          existingWriting: writingContents[sectionId] || '',
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setActiveDiffSession(prev => {
-          if (!prev) return prev;
-          const previews = new Map(prev.writingPreviews);
-          previews.set(sectionId, {
-            mode: data.mode || 'prose',
-            currentPreview: data.currentPreview || '',
-            changedPreview: data.changedPreview || '',
-            isLoading: false,
-          });
-          return { ...prev, writingPreviews: previews };
-        });
-      }
-    } catch (error) {
-      console.error('Failed to fetch writing preview:', error);
-      setActiveDiffSession(prev => {
-        if (!prev) return prev;
-        const previews = new Map(prev.writingPreviews);
-        previews.delete(sectionId);
-        return { ...prev, writingPreviews: previews };
-      });
-    }
-  }, [blocks]);
-
-  // Manual trigger for minor impact sections
-  const requestWritingPreview = useCallback((sectionId: string) => {
-    const session = activeDiffSession;
-    if (!session) return;
-
-    const writingContentsPromise = (async () => {
-      const contents: Record<string, string> = {};
-      const writing = await getWritingContent(sectionId);
-      if (writing) contents[sectionId] = writing;
-      return contents;
-    })();
-
-    // Build proposedChanges from the draft or from sourceChanges (comment flow)
-    let proposedChanges: Array<{ id: string; content: string; status: string }> = [];
-
-    if (session.sourceChanges && session.sourceChanges.length > 0) {
-      // Comment flow: use the AI-simulated source changes
-      proposedChanges = session.sourceChanges.map(c => ({ id: c.id, content: c.content, status: c.status }));
-    } else if (proposalDraft?.draftItems) {
-      // Change flow: build from draft items
-      proposedChanges = proposalDraft.draftItems
-        .map(item => {
-          if (item.isNew && item.content.trim()) return { id: `new-${item.id}`, content: item.content, status: 'new' };
-          if (item.isRemoved) return { id: item.id, content: item.originalContent, status: 'removed' };
-          if (item.content !== item.originalContent) return { id: item.id, content: item.content, status: 'modified' };
-          return null;
-        })
-        .filter((p): p is NonNullable<typeof p> => p !== null);
-    }
-
-    if (proposedChanges.length === 0) return;
-
-    writingContentsPromise.then(writingContents => {
-      fetchWritingPreview(sectionId, session.sourceSectionId, proposedChanges, session.sectionImpacts, writingContents, session);
-    });
-  }, [activeDiffSession, proposalDraft, getWritingContent, fetchWritingPreview]);
-
-  const handleProposeChange = useCallback(async (proposalOrBatch: IntentProposal | IntentProposal[]) => {
-    const proposals = Array.isArray(proposalOrBatch) ? proposalOrBatch : [proposalOrBatch];
-    if (proposals.length === 0) return;
-
-    // Find the root section from the first proposal
-    const findRootId = (intentId: string): string => {
-      const block = blocks.find(b => b.id === intentId);
-      if (!block || !block.parentId) return intentId;
-      return findRootId(block.parentId);
-    };
-    const rootId = findRootId(proposals[0].intentId);
-
-    // Set up diff session with loading state immediately
-    setActiveDiffSession({
-      sourceSectionId: rootId,
-      isLoading: true,
-      sectionImpacts: new Map(),
-      writingPreviews: new Map(),
-      proposal: proposals[0],
-    });
-
-    // Build proposed changes for the simulate API
-    let proposedChanges: Array<{ id: string; content: string; status: 'new' | 'modified' | 'removed' }> = [];
-
-    const isCommentFlow = proposals.length === 1 && proposals[0].type === 'comment';
-
-    if (isCommentFlow) {
-      // Comment flow: first ask AI to simulate what outline changes the comment implies
-      const commentProposal = proposals[0];
-      const rootBlock = blocks.find(b => b.id === rootId);
-      const sourceChildren = blocks
-        .filter(b => b.parentId === rootId)
-        .map((c, idx) => ({ id: c.id, content: c.content, position: idx }));
-
-      try {
-        const simRes = await fetch('/api/simulate-comment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            comment: commentProposal.content,
-            targetIntentId: commentProposal.intentId,
-            sectionIntent: rootBlock?.content || '',
-            sectionChildren: sourceChildren,
-          }),
-        });
-
-        if (simRes.ok) {
-          const simData = await simRes.json();
-          const simChanges: Array<{ id: string; content: string; status: 'new' | 'modified' | 'removed'; reason?: string }> =
-            (simData.proposedChanges || []).map((c: any) => ({
-              id: c.id as string,
-              content: c.content as string,
-              status: c.status as 'new' | 'modified' | 'removed',
-              reason: c.reason as string | undefined,
-            }));
-          proposedChanges = simChanges.map(c => ({ id: c.id, content: c.content, status: c.status }));
-
-          // Store source changes in the session so they can be displayed
-          setActiveDiffSession(prev => prev ? {
-            ...prev,
-            sourceChanges: simChanges,
-          } : prev);
-        }
-      } catch (error) {
-        console.error('Failed to simulate comment:', error);
-      }
-
-      // If AI returned nothing, fall back to the old behavior
-      if (proposedChanges.length === 0) {
-        proposedChanges.push({ id: commentProposal.intentId, content: `[Comment] ${commentProposal.content}`, status: 'modified' });
-      }
-    } else {
-      for (const proposal of proposals) {
-        if (proposal.type === 'edit') {
-          proposedChanges.push({ id: proposal.intentId, content: proposal.content, status: 'modified' });
-        } else if (proposal.type === 'remove') {
-          proposedChanges.push({ id: proposal.intentId, content: proposal.content, status: 'removed' });
-        } else if (proposal.type === 'add') {
-          proposedChanges.push({ id: `proposed-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, content: proposal.content, status: 'new' });
-        }
-      }
-    }
-
-    try {
-      // Get writing content for all sections
-      const writingContents: Record<string, string> = {};
-      const rootBlocks = blocks.filter(b => !b.parentId);
-      for (const rb of rootBlocks) {
-        const writing = await getWritingContent(rb.id);
-        if (writing) writingContents[rb.id] = writing;
-      }
-
-      // Include the source section's current outline for context
-      const rootBlock = blocks.find(b => b.id === rootId);
-      const sourceChildren = blocks
-        .filter(b => b.parentId === rootId)
-        .map((c, idx) => ({ id: c.id, content: c.content, position: idx }));
-
-      // Call assess-impact API with full outline
-      const response = await fetch('/api/assess-impact', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sectionId: rootId,
-          sectionIntent: rootBlock?.content || '',
-          sectionChildren: sourceChildren,
-          proposedChanges,
-          // Send ALL other sections — AI determines relationships
-          relatedSections: rootBlocks
-            .filter(rb => rb.id !== rootId)
-            .map(rb => {
-              const rbChildren = blocks
-                .filter(b => b.parentId === rb.id)
-                .map((c, idx) => ({ id: c.id, content: c.content, position: idx }));
-              return {
-                id: rb.id,
-                intentContent: rb.content,
-                childIntents: rbChildren,
-                writingContent: writingContents[rb.id] || '',
-              };
-            }),
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const impactMap = new Map<string, any>();
-        (data.impacts || []).forEach((impact: any) => {
-          if (impact.impactLevel === 'none') return;
-          impactMap.set(impact.sectionId, {
-            sectionId: impact.sectionId,
-            sectionIntent: impact.sectionIntent,
-            impactLevel: impact.impactLevel,
-            reason: impact.reason,
-            childIntents: blocks
-              .filter(b => b.parentId === impact.sectionId)
-              .map((c, idx) => ({ id: c.id, content: c.content, position: idx })),
-            suggestedChanges: impact.suggestedChanges || [],
-          });
-        });
-
-        const session: ActiveDiffSession = {
-          sourceSectionId: rootId,
-          isLoading: false,
-          sectionImpacts: impactMap,
-          writingPreviews: new Map(),
-          proposal: proposals[0],
-          sourceChanges: isCommentFlow ? proposedChanges.map(c => ({ ...c, status: c.status })) : undefined,
-        };
-        // Carry forward sourceFromWriting flag from proposal draft
-        const isFromWriting = proposalDraft?.sourceFromWriting;
-
-        // Preserve sourceChanges with reasons from simulate-comment step
-        setActiveDiffSession(prev => ({
-          ...session,
-          sourceChanges: prev?.sourceChanges || session.sourceChanges,
-          sourceFromWriting: isFromWriting,
-        }));
-
-        // Auto-trigger writing previews for source + significant impact sections
-        // Skip source section when initiated from writing side (writing already exists)
-        const autoPreviewIds = isFromWriting ? [] : [rootId];
-        impactMap.forEach((impact, sectionId) => {
-          if (impact.impactLevel === 'significant') {
-            autoPreviewIds.push(sectionId);
-          }
-        });
-
-        for (const sectionId of autoPreviewIds) {
-          fetchWritingPreview(sectionId, rootId, proposedChanges, impactMap, writingContents, session);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to simulate proposal impact:', error);
-      setActiveDiffSession(null);
-    }
-  }, [blocks, getWritingContent, proposalDraft]);
 
   const contextValue = useMemo(() => ({
     blockMap,
@@ -885,12 +625,32 @@ export default function IntentPanel({
     onRegisterParagraphAttributionExporter,
     blocks,
     registerBlockRef,
-    // Drift detection
-    driftCheckingIds: drift.checkingIds,
-    triggerCheck: drift.triggerCheck,
-    getDriftStatus: drift.getDriftStatus,
-    getSentenceHighlights: drift.getSentenceHighlights,
-    getConflictForDependency: drift.getConflictForDependency,
+    // Pipeline (replaces drift detection) — merge protocol UI into primitivesByLocation
+    primitivesByLocation: (() => {
+      // Merge sense protocol UI primitives (like "Propose Change" button on outline) into the pipeline's location map
+      if (senseProtocolUI.length === 0) return pipeline.primitivesByLocation;
+      const merged = { ...pipeline.primitivesByLocation };
+      for (const prim of senseProtocolUI) {
+        if (prim.location === 'outline-node') {
+          merged['outline-node'] = [...(merged['outline-node'] || []), prim];
+        }
+      }
+      return merged;
+    })(),
+    getPrimitivesForSection: pipeline.getPrimitivesForSection,
+    senseProtocolUI,
+    // Shared primitive action dispatch — WritingSectionPanel sets this per section
+    onPrimitiveAction: undefined,
+    runSenseProtocol: pipeline.runSenseProtocol,
+    injectResult: pipeline.injectResult,
+    getCrossSectionImpact: pipeline.getCrossSectionImpact,
+    clearResult: pipeline.clearResult,
+    clearAllResults: pipeline.clearAllResults,
+    runFunction: pipeline.runFunction,
+    isRunning: pipeline.isRunning,
+    runningFunctions: pipeline.runningFunctions,
+    getSentenceHighlights,
+    getAlignedIntents,
     // Hover state for intent-writing linking
     hoveredIntentForLink,
     setHoveredIntentForLink,
@@ -901,24 +661,10 @@ export default function IntentPanel({
     // Handled orphans
     handledOrphanStarts,
     markOrphanHandled,
-    // Simulated outline
-    getSimulatedOutline: drift.getSimulatedOutline,
-    hasSimulatedOutline: drift.hasSimulatedOutline,
-    // Pending writing suggestion (Intent → Writing)
-    pendingWritingSuggestion,
-    setPendingWritingSuggestion,
-    pendingIntentSuggestion,
-    setPendingIntentSuggestion,
     aiCoveredIntents,
     aiGeneratedSentences,
     markIntentAsCovered,
     getWritingContent,
-    // Active diff session
-    activeDiffSession,
-    setActiveDiffSession,
-    getSectionImpact,
-    onProposeChange: handleProposeChange,
-    requestWritingPreview,
     // Proposal draft
     proposalDraft,
     setProposalDraft,
@@ -934,6 +680,7 @@ export default function IntentPanel({
     expandedThreadProposalId,
     setExpandedThreadProposalId,
     metaRule: roomMeta?.metaRule,
+    documentSnapshot: pipelineSnapshot,
   }), [
     blockMap, collapsedBlocks, editingBlock, hoveredBlock, selectedBlockId,
     dragDrop.dragOverId, dragDrop.activeId, isSetupPhase, activeSetupTab,
@@ -942,17 +689,16 @@ export default function IntentPanel({
     assignBlock, unassignBlock, currentUser, documentMembers, onlineUserIds, userAvatarMap,
     dependencies, addDependency, depLinks.selectedDepId, depLinks.setSelectedDepId, depLinks.hoveredDepId, depLinks.setHoveredDepId, depLinks.depColorMap, depLinks.connectedBlockIds, depLinks.dragState, depLinks.handleDragStart, intentToWritingMap, roomId, writingBlocks, deleteWritingBlock,
     updateIntentBlockRaw, onRegisterYjsExporter, onRegisterMarkdownExporter, onRegisterParagraphAttributionExporter, blocks, registerBlockRef,
-    drift.checkingIds, drift.triggerCheck, drift.getDriftStatus, drift.getSentenceHighlights, drift.getConflictForDependency, drift.getSimulatedOutline, drift.hasSimulatedOutline,
+    pipeline.primitivesByLocation, pipeline.runSenseProtocol, pipeline.runFunction, pipeline.isRunning, pipeline.runningFunctions, senseProtocolUI, getSentenceHighlights, getAlignedIntents,
     hoveredIntentForLink, setHoveredIntentForLink, hoveredOrphanHint, setHoveredOrphanHint, hoveredIntentFromWriting, setHoveredIntentFromWriting,
     handledOrphanStarts, markOrphanHandled,
     setEditingBlock, setHoveredBlock, setSelectedBlockId,
-    pendingWritingSuggestion, pendingIntentSuggestion, getWritingContent,
+    getWritingContent,
     aiCoveredIntents, aiGeneratedSentences, markIntentAsCovered,
-    activeDiffSession, getSectionImpact, handleProposeChange, requestWritingPreview,
     proposalDraft, openProposalDraft,
     viewingProposalId, viewingProposalForSectionId, viewingProposalAffectedSectionId,
     getSectionNotifications, refreshProposals,
-    expandedThreadProposalId, roomMeta?.metaRule,
+    expandedThreadProposalId, roomMeta?.metaRule, pipelineSnapshot,
   ]);
 
   return (
@@ -1068,8 +814,8 @@ export default function IntentPanel({
                           const isBidi = line.dep.direction === 'bidirectional';
 
                           // Check for conflict on this dependency
-                          const conflict = drift.getConflictForDependency(line.dep.fromIntentId, line.dep.toIntentId);
-                          const hasConflict = !!conflict;
+                          // Conflict detection now via pipeline primitives (not available per-dependency yet)
+                          const hasConflict = false;
 
                           // Use red for conflicts, otherwise original color
                           const c = hasConflict ? '#ef4444' : line.color;
@@ -1186,20 +932,7 @@ export default function IntentPanel({
                                 </div>
                               </foreignObject>
                               )}
-                              {/* Conflict tooltip on hover */}
-                              {hasConflict && isHighlighted && (
-                                <foreignObject
-                                  x={labelX}
-                                  y={labelY + 10}
-                                  width={180}
-                                  height={50}
-                                  style={{ overflow: 'visible' }}
-                                >
-                                  <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded px-2 py-1 text-xs text-red-700 dark:text-red-300 shadow-sm">
-                                    {conflict.issue}
-                                  </div>
-                                </foreignObject>
-                              )}
+                              {/* Conflict tooltip — placeholder for future pipeline-based conflict detection */}
                             </g>
                           );
                         })}
@@ -1265,7 +998,13 @@ export default function IntentPanel({
                   <span>Add Section</span>
                 </button>
               ) : (
-                <ProposeNewSection onPropose={handleProposeChange} />
+                <button
+                  onClick={handleAddBlock}
+                  className="mt-4 flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors pl-1"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span>Add Section</span>
+                </button>
               )}
             </div>
           </SortableContext>

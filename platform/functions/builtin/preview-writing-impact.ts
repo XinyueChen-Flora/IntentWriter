@@ -6,6 +6,11 @@ registerFunction({
   description: 'Generate before/after prose preview for a proposed change.',
   icon: 'FileText',
   trigger: 'proposal',
+  target: { type: 'section', description: 'Previews how outline changes would affect writing' },
+  category: 'proposing',
+  triggerOptions: [{ value: 'auto', label: 'Automatic on propose' }],
+  defaultTrigger: 'auto',
+  dependsOn: ['assess-impact'],
 
   requires: { writing: true },
 
@@ -50,11 +55,19 @@ Return JSON:
 
   ui: [
     {
+      type: 'banner',
+      location: 'draft-panel',
+      params: {
+        title: 'How your writing would change',
+        message: '{{changeDescription}}',
+        severity: 'info',
+      },
+    },
+    {
       type: 'diff-view',
       params: {
         before: '{{currentPreview}}',
         after: '{{changedPreview}}',
-        mode: 'side-by-side',
       },
     },
   ],

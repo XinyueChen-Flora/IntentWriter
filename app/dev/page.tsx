@@ -1,2087 +1,1494 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
-import { getAllFunctions, getFunctionsByTrigger, registerFunction, type FunctionDefinition } from "@/platform/functions/protocol";
+import React, { useState, useCallback, useRef, useEffect } from "react";
+import Link from "next/link";
+import { getAllFunctions, registerFunction, getFunction, type FunctionDefinition } from "@/platform/functions/protocol";
 import { runFunction } from "@/platform/functions/runner";
 import { resolveBindings, groupByLocation, type ResolvedPrimitive } from "@/platform/primitives/resolver";
-import { getAllCoordinationPaths, type CoordinationPathDefinition } from "@/platform/coordination/protocol";
-import { getPathUI, getAllPathUIs } from "@/platform/coordination/ui";
-import { getAllPrimitives } from "@/platform/primitives/registry";
-import type { UIBinding } from "@/platform/primitives/registry";
+import { getAllPrimitives, type PrimitiveDefinition } from "@/platform/primitives/registry";
+import { getAllSenseProtocols, registerSenseProtocol, type SenseProtocolDefinition } from "@/platform/sense/protocol";
+import { getAllCoordinationPaths, registerCoordinationPath, type CoordinationPathDefinition } from "@/platform/coordination/protocol";
+import type { ProtocolStep } from "@/platform/protocol-types";
+import { getPathUI } from "@/platform/coordination/ui";
+import { PrimitiveRenderer } from "@/components/capability/PrimitiveRenderer";
 import type { DocumentSnapshot } from "@/platform/data-model";
-import { ChevronDown, ChevronRight, Copy, Check, ExternalLink, Plus, Trash2, Play, FlaskConical } from "lucide-react";
+import { ChevronDown, ChevronRight, FlaskConical, Code2, Plus, Layers, Eye, Users, Code, Play } from "lucide-react";
+import { Highlight, themes } from "prism-react-renderer";
 
-// Ensure builtins are registered
-import "@/platform/primitives/registry";
 import "@/platform/functions/builtin";
+import "@/platform/sense/builtin";
 import "@/platform/coordination/builtin";
 
-type Tab = "functions" | "paths" | "data-slots";
+// ═══════════════════════════════════════════════════════
+// MOCK DATA
+// ═══════════════════════════════════════════════════════
 
-export default function DevPage() {
-  const [tab, setTab] = useState<Tab>("functions");
-  const [refreshKey, setRefreshKey] = useState(0);
-  const functions = getAllFunctions();
-  const paths = getAllCoordinationPaths();
-
-  // Load saved custom functions on mount
-  useEffect(() => {
-    fetch('/api/dev/save-function')
-      .then(res => res.json())
-      .then(({ functions: saved }) => {
-        if (!saved?.length) return;
-        let registered = 0;
-        for (const { code } of saved as Array<{ id: string; code: string }>) {
-          try {
-            const stripped = code.replace(/import.*from.*;\n?/g, '');
-            const fn = new Function('registerFunction', stripped);
-            fn(registerFunction);
-            registered++;
-          } catch (e) {
-            console.warn('[dev] Failed to load custom function:', e);
-          }
-        }
-        if (registered > 0) setRefreshKey(k => k + 1);
-      })
-      .catch(() => {});
-  }, []);
-
-  const handleFunctionRegistered = useCallback(() => {
-    setRefreshKey(k => k + 1);
-  }, []);
-
-  return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b bg-card">
-        <div className="max-w-4xl mx-auto px-6 py-6">
-          <div className="text-xs font-mono text-muted-foreground mb-2">GroundingKit Platform</div>
-          <h1 className="text-2xl font-semibold tracking-tight">Developer Reference</h1>
-          <p className="text-sm text-muted-foreground mt-1.5">
-            Register functions and coordination paths to extend the platform.
-          </p>
-        </div>
-      </header>
-
-      {/* Tab bar */}
-      <div className="border-b bg-card sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-6 flex gap-0">
-          <TabButton active={tab === "functions"} onClick={() => setTab("functions")}>
-            Functions <CountBadge count={functions.length} />
-          </TabButton>
-          <TabButton active={tab === "paths"} onClick={() => setTab("paths")}>
-            Coordination Paths <CountBadge count={paths.length} />
-          </TabButton>
-          <TabButton active={tab === "data-slots"} onClick={() => setTab("data-slots")}>
-            Data Slots
-          </TabButton>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="max-w-4xl mx-auto px-6 py-8">
-        {tab === "functions" ? (
-          <FunctionsTab key={refreshKey} functions={functions} onRegistered={handleFunctionRegistered} />
-        ) : tab === "paths" ? (
-          <PathsTab paths={paths} />
-        ) : (
-          <DataSlotsTab />
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Functions Tab ───
-
-function FunctionsTab({ functions, onRegistered }: { functions: FunctionDefinition[]; onRegistered: () => void }) {
-  const grouped = {
-    detection: functions.filter(f => f.trigger === "detection"),
-    proposal: functions.filter(f => f.trigger === "proposal"),
-    'on-demand': functions.filter(f => f.trigger === "on-demand"),
-  };
-
-  return (
-    <div className="space-y-10">
-      {/* Overview */}
-      <section>
-        <p className="text-sm text-muted-foreground leading-relaxed max-w-2xl">
-          A <strong>function</strong> reads document data, produces structured results,
-          and declares how those results render in the UI.
-        </p>
-      </section>
-
-      {/* ─── Step 1: Input ─── */}
-      <section>
-        <SectionTitle>1. Input &mdash; what data your function receives</SectionTitle>
-        <p className="text-xs text-muted-foreground mb-3 leading-relaxed max-w-2xl">
-          Every function receives a <Code>FunctionInput</Code>. The core is the{' '}
-          <Code>snapshot</Code> &mdash; a read-only view of the entire document.
-        </p>
-        <CodeBlock>{`type FunctionInput = {
-  snapshot: DocumentSnapshot;        // full document state
-  focus?: FunctionFocus;             // optional: specific target
-  config: Record<string, unknown>;   // team-configured options
-};`}</CodeBlock>
-
-        <p className="text-xs text-muted-foreground mt-4 mb-2">
-          Here is what <Code>snapshot</Code> looks like at runtime:
-        </p>
-        <CodeBlock>{`snapshot = {
-  documentId: "doc-abc",
-  phase: "writing",
-
-  // ── Outline (always available) ──
-  nodes: [
-    { id: "s1", content: "Introduction", parentId: null, level: 0, position: 0,
-      createdBy: { userId: "u1", userName: "Alice", at: 1710000000 } },
-    { id: "i1", content: "Explain the motivation", parentId: "s1", level: 1, position: 0, ... },
-    { id: "i2", content: "Define key terms", parentId: "s1", level: 1, position: 1, ... },
-    { id: "s2", content: "Method", parentId: null, level: 0, position: 1, ... },
-  ],
-  assignments: [
-    { sectionId: "s1", assigneeId: "u1", assigneeName: "Alice" },
-    { sectionId: "s2", assigneeId: "u2", assigneeName: "Bob" },
-  ],
-
-  // ── Writing (requires: { writing: true }) ──
-  writing: [
-    {
-      sectionId: "s1",
-      html: "<p>The system addresses a gap in...</p><p>We define alignment as...</p>",
-      text: "The system addresses a gap in... We define alignment as...",
-      wordCount: 156,
-      paragraphs: [
-        { index: 0, textPrefix: "The system addresses a gap in", lastEditBy: { userId: "u1", userName: "Alice", at: 1710001000 } },
-        { index: 1, textPrefix: "We define alignment as", lastEditBy: { userId: "u2", userName: "Bob", at: 1710002000 } },
-      ],
-    },
-  ],
-
-  // ── Dependencies (requires: { dependencies: true }) ──
-  dependencies: [
-    { id: "d1", fromId: "s1", toId: "s2", type: "builds-upon", label: "Method builds on Introduction",
-      direction: "directed", source: "ai-suggested", confirmed: true, ... },
-  ],
-
-  // ── Team (requires: { members: true }) ──
-  members: [
-    { userId: "u1", name: "Alice", role: "owner" },
-    { userId: "u2", name: "Bob", role: "editor" },
-  ],
-  currentUserId: "u1",
-}`}</CodeBlock>
-
-        <p className="text-xs text-muted-foreground mt-4 mb-2">
-          Declare which parts you need via <Code>requires</Code>.
-          Outline (<Code>nodes</Code>, <Code>assignments</Code>) is always available:
-        </p>
-        <div className="border rounded-lg overflow-hidden">
-          <div className="divide-y">
-            {([
-              ['requires: { writing: true }', 'snapshot.writing', 'Per-section content: html, text, wordCount, paragraph attributions'],
-              ['requires: { dependencies: true }', 'snapshot.dependencies', 'Relationships between nodes: type, direction, confirmed'],
-              ['requires: { members: true }', 'snapshot.members', 'Team members: name, role, email + currentUserId'],
-            ] as const).map(([req, field, desc]) => (
-              <div key={req} className="flex items-baseline gap-3 px-4 py-2 text-xs">
-                <span className="font-mono font-medium flex-shrink-0">{req}</span>
-                <span className="font-mono text-muted-foreground flex-shrink-0">&rarr; {field}</span>
-                <span className="text-muted-foreground ml-auto text-right">{desc}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <p className="text-xs text-muted-foreground mt-3">
-          Helpers for traversing the outline:
-        </p>
-        <CodeBlock>{`import { getSections, getChildren, getWriting, getAssignee } from '@/lib/data-model';
-
-const sections = getSections(snapshot);           // root nodes (level 0), sorted
-const children = getChildren(snapshot, "s1");     // children of s1, sorted
-const writing  = getWriting(snapshot, "s1");      // WritingContent for section s1
-const assignee = getAssignee(snapshot, "s1");     // who owns section s1`}</CodeBlock>
-      </section>
-
-      {/* ─── Step 2: Logic ─── */}
-      <section>
-        <SectionTitle>2. Logic &mdash; how your function runs</SectionTitle>
-        <p className="text-xs text-muted-foreground mb-3 leading-relaxed max-w-2xl">
-          Two execution modes:
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="border rounded-lg p-4">
-            <div className="text-xs font-semibold mb-1">Rule-based <Code>executor: &apos;local&apos;</Code></div>
-            <div className="text-[11px] text-muted-foreground mb-2">Write a function that reads snapshot and returns results.</div>
-            <CodeBlock>{`executor: 'local',
-fn: (input: FunctionInput) => {
-  const { snapshot, config } = input;
-
-  // Read data from snapshot
-  const sections = getSections(snapshot);
-  const limit = (config.wordLimit as number) ?? 200;
-
-  // Compute results
-  const violations = sections
-    .map(s => ({
-      sectionId: s.id,
-      wordCount: getWriting(snapshot, s.id)?.wordCount ?? 0,
-      limit,
-    }))
-    .filter(v => v.wordCount > v.limit);
-
-  // Return structured result
-  return {
-    functionId: 'my-function',
-    data: { violations, total: violations.length },
-    ui: [],
-    computedAt: Date.now(),
-  };
-},`}</CodeBlock>
-          </div>
-          <div className="border rounded-lg p-4">
-            <div className="text-xs font-semibold mb-1">Prompt-based <Code>executor: &apos;prompt&apos;</Code></div>
-            <div className="text-[11px] text-muted-foreground mb-2">Write a prompt. Platform fills data, calls AI, parses response.</div>
-            <CodeBlock>{`executor: 'prompt',
-prompt: {
-  system: \`You check if each sentence
-serves its parent intent.
-
-Return JSON:
-{
-  "sentences": [{
-    "text": "...",
-    "intentId": "...",
-    "status": "aligned | off-topic",
-    "reason": "..."
-  }],
-  "alignedCount": number,
-  "totalCount": number
-}\`,
-  user: \`## Intents
-{{nodes}}
-
-## Writing
-{{writing}}\`,
-},
-// Platform automatically:
-// 1. Fills {{nodes}}, {{writing}} from snapshot
-// 2. Calls AI with your prompt
-// 3. Parses JSON response
-// 4. Validates against outputSchema`}</CodeBlock>
-          </div>
-        </div>
-        <p className="text-xs text-muted-foreground mt-3">
-          Prompt templates can use: <Code>{"{{nodes}}"}</Code> <Code>{"{{writing}}"}</Code>{' '}
-          <Code>{"{{dependencies}}"}</Code> <Code>{"{{assignments}}"}</Code>{' '}
-          <Code>{"{{members}}"}</Code> <Code>{"{{focus}}"}</Code> <Code>{"{{config}}"}</Code>.
-          Arrays are auto-formatted as readable text.
-        </p>
-      </section>
-
-      {/* ─── Step 3: Output → UI ─── */}
-      <section>
-        <SectionTitle>3. Output &amp; UI &mdash; what you return and how it renders</SectionTitle>
-        <p className="text-xs text-muted-foreground mb-3 leading-relaxed max-w-2xl">
-          Your function returns a <Code>data</Code> object. Each field can be bound to
-          a UI primitive. <strong>Array fields</strong> produce per-item rendering
-          (one highlight per sentence), <strong>scalar fields</strong> drive conditions and summary text.
-        </p>
-
-        <p className="text-xs font-semibold mb-2">Example: function returns this data &darr;</p>
-        <CodeBlock>{`data: {
-  sentences: [
-    { text: "The system addresses a gap in...", intentId: "i1", status: "aligned",  reason: "Supports motivation" },
-    { text: "Performance is critical for...",   intentId: "i1", status: "off-topic", reason: "Not related to motivation" },
-    { text: "We define alignment as...",        intentId: "i2", status: "partial",   reason: "Partially covers definition" },
-  ],
-  alignedCount: 1,
-  totalCount: 3,
-}`}</CodeBlock>
-      </section>
-
-      {/* ─── UI Primitives with previews ─── */}
-      <section>
-        <SectionTitle>UI Primitives</SectionTitle>
-        <p className="text-xs text-muted-foreground mb-4 leading-relaxed max-w-2xl">
-          12 primitives organized by render location. Use <Code>forEach</Code> to iterate arrays,{' '}
-          <Code>filter</Code> to conditionally render, <Code>{"{{item.field}}"}</Code> to fill parameters.
-        </p>
-
-        {/* ── Editor Primitives ── */}
-        <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-2 mt-6">Editor (writing area)</div>
-        <div className="space-y-3">
-          <PrimitivePreview
-            name="sentence-highlight"
-            location="writing-editor"
-            description="Color a text range by anchor text matching. For sentence-level feedback."
-            binding={`{
-  type: 'sentence-highlight',
-  forEach: 'issues',
-  filter: 'item.status !== "aligned"',
-  params: {
-    startAnchor: '{{item.text}}',
-    color: 'red',
-    tooltip: '{{item.reason}}',
-  }
-}`}
-            preview={
-              <div className="text-sm leading-relaxed space-y-1.5">
-                <p>The system addresses a gap in collaborative writing.</p>
-                <p><span className="bg-red-100 border-b-2 border-red-400 px-0.5">Performance is critical for real-time systems.</span></p>
-                <p className="text-[10px] text-muted-foreground ml-4">hover: &quot;Not related to motivation&quot;</p>
-                <p><span className="bg-yellow-100 border-b-2 border-yellow-400 px-0.5">We define alignment as the degree to which...</span></p>
-              </div>
-            }
-          />
-
-          <PrimitivePreview
-            name="issue-dot"
-            location="writing-editor"
-            description="Numbered dot at sentence boundary. Click to expand detail popover with actions."
-            binding={`{
-  type: 'issue-dot',
-  forEach: 'issues',
-  params: {
-    anchor: '{{item.sentence}}',
-    index: '{{item.index}}',
-    type: '{{item.issueType}}',
-    detail: '{{item.description}}',
-  }
-}`}
-            preview={
-              <div className="text-sm leading-relaxed">
-                <p>The system addresses a gap in collaborative writing.
-                  <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-red-100 text-red-600 text-[9px] font-bold ml-0.5 align-super">1</span>
-                </p>
-                <p>We propose a framework for intent-aware coordination.
-                  <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-yellow-100 text-yellow-600 text-[9px] font-bold ml-0.5 align-super">2</span>
-                </p>
-                <div className="mt-2 border rounded-md p-2 bg-muted/20 text-xs max-w-[200px]">
-                  <div className="font-medium text-red-600 mb-1">Missing coverage</div>
-                  <div className="text-muted-foreground">No sentences support this intent</div>
-                  <div className="flex gap-1.5 mt-1.5">
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary text-primary-foreground">Simulate</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded border">Dismiss</span>
-                  </div>
-                </div>
-              </div>
-            }
-          />
-
-          <PrimitivePreview
-            name="inline-widget"
-            location="writing-editor"
-            description="Block widget in editor: suggestions with Accept/Dismiss, missing content indicators."
-            binding={`{
-  type: 'inline-widget',
-  when: 'suggestion.content',
-  params: {
-    anchor: '{{suggestion.insertAfter}}',
-    content: '{{suggestion.content}}',
-    variant: 'suggestion',
-    intentRef: '{{suggestion.intentId}}',
-  }
-}`}
-            preview={
-              <div className="text-sm leading-relaxed space-y-2">
-                <p className="text-muted-foreground">...collaborative writing where intent and output diverge.</p>
-                <div className="border-2 border-dashed border-emerald-300 rounded-md p-3 bg-emerald-50/50">
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">Suggested</span>
-                    <span className="text-[10px] text-muted-foreground italic">for: Explain the motivation</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground">Prior work on document collaboration has focused on conflict resolution at the text level, but lacks semantic awareness of author intentions.</p>
-                  <div className="flex gap-1.5 mt-2">
-                    <span className="text-[10px] px-2 py-1 rounded bg-emerald-600 text-white">Accept</span>
-                    <span className="text-[10px] px-2 py-1 rounded border">Dismiss</span>
-                  </div>
-                </div>
-                <p className="text-muted-foreground">We propose a framework for...</p>
-              </div>
-            }
-          />
-
-          <PrimitivePreview
-            name="ai-marker"
-            location="writing-editor"
-            description="Marks a text range as AI-generated with a subtle tint and provenance icon."
-            binding={`{
-  type: 'ai-marker',
-  forEach: 'aiGeneratedRanges',
-  params: {
-    startAnchor: '{{item.start}}',
-    endAnchor: '{{item.end}}',
-  }
-}`}
-            preview={
-              <div className="text-sm leading-relaxed">
-                <p>The system addresses a gap in collaborative writing.</p>
-                <p className="bg-blue-50/50 border-l-2 border-blue-200 pl-2">
-                  <span className="inline-flex items-center gap-0.5 text-[9px] text-blue-500 font-medium mr-1 align-middle">&#10024; AI</span>
-                  Prior work has focused primarily on conflict resolution at the text level.
-                </p>
-              </div>
-            }
-          />
-        </div>
-
-        {/* ── Outline Primitives ── */}
-        <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-2 mt-8">Outline (left panel)</div>
-        <div className="space-y-3">
-          <PrimitivePreview
-            name="node-icon"
-            location="outline-node"
-            description="Status icon on intent node. Shows coverage state: covered, partial, missing, ai-covered."
-            binding={`{
-  type: 'node-icon',
-  forEach: 'alignedIntents',
-  params: {
-    nodeId: '{{item.id}}',
-    status: '{{item.coverageStatus}}',
-  }
-}`}
-            preview={
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-emerald-500">&#10003;</span>
-                  <span>Explain the motivation</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-yellow-500">&#9681;</span>
-                  <span>Define key terms</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-red-400">&#9675;</span>
-                  <span>State the research question</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-blue-500">&#10024;</span>
-                  <span>Summarize contributions</span>
-                </div>
-              </div>
-            }
-          />
-
-          <PrimitivePreview
-            name="node-badge"
-            location="outline-node"
-            description="Small pill label on an intent node. Multiple badges can stack."
-            binding={`{
-  type: 'node-badge',
-  forEach: 'intents',
-  filter: 'item.coverageStatus !== "covered"',
-  params: {
-    nodeId: '{{item.id}}',
-    label: '{{item.coverageStatus}}',
-    variant: 'warning',
-  }
-}`}
-            preview={
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-muted-foreground">&#9654;</span>
-                  <span>Explain the motivation</span>
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-yellow-100 text-yellow-700 border border-yellow-200">partial</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-muted-foreground">&#9654;</span>
-                  <span>State the research question</span>
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">missing</span>
-                </div>
-              </div>
-            }
-          />
-
-          <PrimitivePreview
-            name="section-alert"
-            location="outline-node"
-            description="Notification card below a section node. For cross-section impacts and warnings."
-            binding={`{
-  type: 'section-alert',
-  forEach: 'impacts',
-  filter: 'item.impactLevel === "significant"',
-  params: {
-    sectionId: '{{item.sectionId}}',
-    title: 'Impact from proposed change',
-    message: '{{item.reason}}',
-    severity: 'warning',
-  }
-}`}
-            preview={
-              <div className="max-w-xs">
-                <div className="text-sm font-medium mb-2">&#9654; Related Work</div>
-                <div className="ml-4 border-l-2 border-amber-300 bg-amber-50 rounded-r-md px-3 py-2">
-                  <div className="text-xs font-semibold text-amber-800">Impact from proposed change</div>
-                  <div className="text-[11px] text-amber-700 mt-0.5">Terminology definitions used here must stay consistent with updated Introduction.</div>
-                  <div className="flex gap-1.5 mt-1.5">
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-600 text-white">Review</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-300 text-amber-700">Dismiss</span>
-                  </div>
-                </div>
-              </div>
-            }
-          />
-
-          <PrimitivePreview
-            name="summary-bar"
-            location="outline-node"
-            description="Alignment stats bar. Shows coverage counts and overall alignment level."
-            binding={`{
-  type: 'summary-bar',
-  params: {
-    counts: '{{coverageCounts}}',
-    level: '{{level}}',
-  }
-}`}
-            preview={
-              <div className="border rounded-lg px-3 py-2 bg-muted/20">
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="font-medium">Alignment</span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-700">partial</span>
-                </div>
-                <div className="flex items-center gap-3 mt-1.5">
-                  <span className="flex items-center gap-1 text-[11px]"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> 3 covered</span>
-                  <span className="flex items-center gap-1 text-[11px]"><span className="w-2 h-2 rounded-full bg-yellow-500 inline-block" /> 1 partial</span>
-                  <span className="flex items-center gap-1 text-[11px]"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" /> 1 missing</span>
-                </div>
-              </div>
-            }
-          />
-        </div>
-
-        {/* ── Panel Primitives ── */}
-        <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-2 mt-8">Panel (right side)</div>
-        <div className="space-y-3">
-          <PrimitivePreview
-            name="result-list"
-            location="right-panel"
-            description="Expandable card list. Each card has title, badge, detail, and optional action buttons."
-            binding={`{
-  type: 'result-list',
-  forEach: 'impacts',
-  filter: 'item.impactLevel !== "none"',
-  params: {
-    title: '{{item.sectionIntent}}',
-    badge: '{{item.impactLevel}}',
-    badgeVariant: 'warning',
-    detail: '{{item.reason}}',
-  }
-}`}
-            preview={
-              <div className="space-y-2 max-w-xs">
-                <div className="border rounded-md overflow-hidden">
-                  <div className="flex items-center justify-between px-3 py-2">
-                    <span className="text-xs font-medium">Method</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">significant</span>
-                  </div>
-                  <div className="px-3 py-2 border-t bg-muted/10 text-[11px] text-muted-foreground">Terminology definitions must stay consistent.</div>
-                </div>
-                <div className="border rounded-md overflow-hidden">
-                  <div className="flex items-center justify-between px-3 py-2">
-                    <span className="text-xs font-medium">Related Work</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">minor</span>
-                  </div>
-                </div>
-              </div>
-            }
-          />
-
-          <PrimitivePreview
-            name="diff-view"
-            location="right-panel"
-            description="Text comparison: word-level inline diff or side-by-side two-column layout."
-            binding={`{
-  type: 'diff-view',
-  params: {
-    before: '{{currentPreview}}',
-    after: '{{changedPreview}}',
-    mode: 'side-by-side',
-  }
-}`}
-            preview={
-              <div className="grid grid-cols-2 gap-2 text-[11px] max-w-sm">
-                <div className="border rounded p-2 bg-red-50/30">
-                  <div className="text-[9px] font-semibold text-muted-foreground uppercase mb-1">Before</div>
-                  <p>The system addresses <span className="bg-red-200 line-through">performance bottlenecks</span> in collaborative writing.</p>
-                </div>
-                <div className="border rounded p-2 bg-emerald-50/30">
-                  <div className="text-[9px] font-semibold text-muted-foreground uppercase mb-1">After</div>
-                  <p>The system addresses <span className="bg-emerald-200 underline">intent alignment gaps</span> in collaborative writing.</p>
-                </div>
-              </div>
-            }
-          />
-
-          <PrimitivePreview
-            name="action-group"
-            location="right-panel"
-            description="Standalone button row at panel footer. For top-level actions."
-            binding={`{
-  type: 'action-group',
-  when: 'proposedChanges.length > 0',
-  params: {
-    actions: '[{"label":"Apply","variant":"primary","action":"apply"},{"label":"Dismiss","variant":"secondary","action":"dismiss"}]',
-  }
-}`}
-            preview={
-              <div className="flex gap-2 pt-2 border-t">
-                <button className="text-[11px] px-3 py-1.5 rounded-md bg-primary text-primary-foreground">Apply Changes</button>
-                <button className="text-[11px] px-3 py-1.5 rounded-md border">Dismiss</button>
-                <button className="text-[11px] px-3 py-1.5 rounded-md border text-red-600 border-red-200">Reject</button>
-              </div>
-            }
-          />
-        </div>
-
-        {/* ── Global Primitives ── */}
-        <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-2 mt-8">Global</div>
-        <div className="space-y-3">
-          <PrimitivePreview
-            name="banner"
-            location="global"
-            description="Top-of-app notification bar. For document-level status and warnings."
-            binding={`{
-  type: 'banner',
-  when: 'level === "drifted"',
-  params: {
-    title: 'Drift detected',
-    message: '{{summary}}',
-    severity: 'warning',
-  }
-}`}
-            preview={
-              <div className="flex items-start gap-2 px-3 py-2 rounded-md bg-amber-50 border border-amber-200">
-                <span className="text-amber-500 mt-0.5">&#9888;</span>
-                <div>
-                  <div className="text-xs font-semibold text-amber-800">Drift detected</div>
-                  <div className="text-xs text-amber-700">2 intents have partial coverage, 1 is missing</div>
-                </div>
-              </div>
-            }
-          />
-        </div>
-
-        <p className="text-xs text-muted-foreground mt-6">
-          Template syntax: <Code>{"{{item.field}}"}</Code> references the current array item,{' '}
-          <Code>{"{{fieldName}}"}</Code> references top-level scalar fields in the result.
-        </p>
-      </section>
-
-      {/* ─── Full Examples ─── */}
-      <section>
-        <SectionTitle>Complete Examples</SectionTitle>
-        <p className="text-xs text-muted-foreground mb-4">Two end-to-end examples showing how input, logic, output, and UI fit together.</p>
-
-        <div className="text-xs font-semibold mb-2">A. Rule-based &mdash; Intent Word Limit</div>
-        <p className="text-xs text-muted-foreground mb-3">
-          Check if each section&apos;s writing exceeds 200 words. Badge on the intent, banner at the top.
-        </p>
-        <CodeBlock>{`import { registerFunction, type FunctionInput } from '@/lib/function-protocol';
-import { getSections, getWriting } from '@/lib/data-model';
-
-registerFunction({
-  id: 'intent-word-limit',
-  name: 'Intent Word Limit',
-  description: 'Flag sections whose writing exceeds a word limit.',
-  icon: 'Hash',
-  trigger: 'detection',
-  requires: { writing: true },
-
-  executor: 'local',
-  fn: (input: FunctionInput) => {
-    const { snapshot, config } = input;
-    const limit = (config.wordLimit as number) ?? 200;
-    const violations = getSections(snapshot)
-      .map(section => {
-        const w = getWriting(snapshot, section.id);
-        return { sectionId: section.id, intent: section.content, wordCount: w?.wordCount ?? 0, limit };
-      })
-      .filter(v => v.wordCount > v.limit);
-
-    return {
-      functionId: 'intent-word-limit',
-      data: { violations, total: violations.length },
-      ui: [],
-      computedAt: Date.now(),
-    };
-  },
-
-  outputSchema: {
-    violations: "Array<{ sectionId, intent, wordCount, limit }>",
-    total: "number",
-  },
-
-  ui: [
-    {
-      type: 'inline-badge',
-      forEach: 'violations',
-      attachTo: '{{item.sectionId}}',
-      label: '{{item.wordCount}}/{{item.limit}} words',
-      variant: 'warning',
-    },
-    {
-      type: 'banner',
-      when: 'total > 0',
-      title: 'Word limit exceeded',
-      message: '{{total}} section(s) over the {{violations[0].limit}}-word limit',
-      severity: 'warning',
-    },
-  ],
-
-  configFields: [
-    { type: 'number', key: 'wordLimit', label: 'Word limit', min: 50, max: 5000, unit: 'words' },
-  ],
-  defaultConfig: { wordLimit: 200 },
-});`}</CodeBlock>
-
-        <div className="text-xs font-semibold mb-2 mt-6">B. Prompt-based &mdash; Sentence Alignment Check</div>
-        <p className="text-xs text-muted-foreground mb-3">
-          Developer writes a prompt to evaluate whether each sentence serves its intent.
-          Platform calls AI, parses the response, and renders sentence-level highlights.
-        </p>
-        <CodeBlock>{`import { registerFunction } from '@/lib/function-protocol';
-
-registerFunction({
-  id: 'check-sentence-alignment',
-  name: 'Sentence Alignment',
-  description: 'Check if each sentence accurately reflects its intent.',
-  icon: 'ScanSearch',
-  trigger: 'detection',
-  requires: { writing: true },
-
-  executor: 'prompt',
-  prompt: {
-    system: \`You check whether each sentence in the writing serves its parent intent.
-
-For each sentence, determine:
-- "aligned": sentence directly supports the intent
-- "partial": loosely related but doesn't fully address it
-- "off-topic": sentence doesn't belong under this intent
-
-Return JSON:
-{
-  "sentences": [
-    { "text": "the sentence", "intentId": "id", "status": "aligned|partial|off-topic", "reason": "why" }
-  ],
-  "alignedCount": number,
-  "totalCount": number
-}\`,
-    user: \`## Intents
-{{nodes}}
-
-## Writing
-{{writing}}\`,
-  },
-
-  // The output shape the AI must return — platform validates this
-  outputSchema: {
-    sentences: \`Array<{
-      text: string,
-      intentId: string,
-      status: 'aligned' | 'partial' | 'off-topic',
-      reason: string,
-    }>\`,
-    alignedCount: "number",
-    totalCount: "number",
-  },
-
-  // How the parsed results render in the UI
-  ui: [
-    // Highlight misaligned sentences in the writing editor
-    {
-      type: 'inline-highlight',
-      forEach: 'sentences',
-      filter: 'item.status !== "aligned"',
-      startAnchor: '{{item.text}}',
-      endAnchor: '{{item.text}}',
-      color: '{{item.status === "off-topic" ? "red" : "yellow"}}',
-    },
-    // Badge on the intent node for off-topic sentences
-    {
-      type: 'inline-badge',
-      forEach: 'sentences',
-      filter: 'item.status === "off-topic"',
-      attachTo: '{{item.intentId}}',
-      label: 'Off-topic',
-      variant: 'destructive',
-    },
-    // Summary banner
-    {
-      type: 'banner',
-      when: 'alignedCount < totalCount',
-      title: 'Alignment issues',
-      message: '{{totalCount - alignedCount}} of {{totalCount}} sentences need attention',
-      severity: 'warning',
-    },
-  ],
-
-  configFields: [],
-  defaultConfig: {},
-});`}</CodeBlock>
-      </section>
-
-      {/* ─── Register a new function ─── */}
-      <section>
-        <SectionTitle>Register a Function</SectionTitle>
-        <RegisterFunctionSection onRegistered={onRegistered} />
-      </section>
-
-      {/* Registered functions by trigger */}
-      {(["detection", "proposal", "on-demand"] as const).map(trigger => {
-        const items = grouped[trigger];
-        if (items.length === 0) return null;
-        return (
-          <section key={trigger}>
-            <SectionTitle>
-              {trigger === 'detection' ? 'Detection' : trigger === 'proposal' ? 'Proposal' : 'On-demand'}
-              {' '}<span className="text-muted-foreground font-normal">({items.length})</span>
-            </SectionTitle>
-            <p className="text-xs text-muted-foreground mb-3">
-              {trigger === 'detection' && 'Run during or after writing to check alignment.'}
-              {trigger === 'proposal' && 'Run when a writer proposes a change to analyze impact.'}
-              {trigger === 'on-demand' && 'Invoked explicitly by user action.'}
-            </p>
-            <div className="space-y-3">
-              {items.map(fn => (
-                <FunctionCard key={fn.id} func={fn} />
-              ))}
-            </div>
-          </section>
-        );
-      })}
-    </div>
-  );
-}
-
-// ─── Data Slots Tab ───
-
-function DataSlotsTab() {
-  return (
-    <div className="space-y-10">
-      <section>
-        <p className="text-sm text-muted-foreground leading-relaxed max-w-2xl">
-          Every function receives a <Code>DocumentSnapshot</Code> — a read-only view of the
-          document&apos;s current state. It contains the outline, writing, dependencies, and team info.
-          Functions declare which parts they need via <Code>requires</Code>.
-        </p>
-        <div className="mt-3">
-          <CodeBlock>{`// What your function receives:
-type FunctionInput = {
-  snapshot: DocumentSnapshot;   // full current state
-  focus?: FunctionFocus;        // optional: specific target (section, intent)
-  config: Record<string, unknown>;  // team-configured options
-};`}</CodeBlock>
-        </div>
-      </section>
-
-      {/* Outline */}
-      <section>
-        <SectionTitle>snapshot.nodes <span className="text-muted-foreground font-normal">— Outline</span></SectionTitle>
-        <p className="text-xs text-muted-foreground mb-3">
-          The hierarchical intent structure. Sections are root nodes (parentId = null),
-          intents are children. Always available.
-        </p>
-        <TypeBlock title="OutlineNode" fields={[
-          ["id", "string", "Unique identifier"],
-          ["content", "string", "The intent text"],
-          ["position", "number", "Sort order among siblings"],
-          ["parentId", "string | null", "null = section (root), otherwise child"],
-          ["level", "number", "0 = section, 1+ = nested intent"],
-          ["createdBy", "Attribution", "{ userId, userName, at }"],
-          ["modifiedBy?", "Attribution", "Present only if edited after creation"],
-        ]} />
-        <div className="mt-2" />
-        <TypeBlock title="SectionAssignment (snapshot.assignments)" fields={[
-          ["sectionId", "string", "Root node ID"],
-          ["assigneeId", "string", "User ID of the owner"],
-          ["assigneeName", "string", "Display name"],
-          ["assigneeEmail?", "string", "Email"],
-        ]} />
-        <div className="mt-3 text-xs text-muted-foreground">
-          Helpers: <Code>getSections(snapshot)</Code> <Code>getChildren(snapshot, parentId)</Code> <Code>getAssignee(snapshot, sectionId)</Code>
-        </div>
-      </section>
-
-      {/* Writing */}
-      <section>
-        <SectionTitle>snapshot.writing <span className="text-muted-foreground font-normal">— Writing Content</span></SectionTitle>
-        <p className="text-xs text-muted-foreground mb-3">
-          One entry per section. Includes HTML, plain text, word count, and per-paragraph attribution.
-          Available in writing phase. Declare <Code>requires: {"{ writing: true }"}</Code> to use.
-        </p>
-        <TypeBlock title="WritingContent" fields={[
-          ["sectionId", "string", "Which section this writing belongs to"],
-          ["html", "string", "HTML content from the editor"],
-          ["text", "string", "Plain text (for word count, search)"],
-          ["wordCount", "number", "Word count"],
-          ["paragraphs", "ParagraphAttribution[]", "Who last edited each paragraph"],
-        ]} />
-        <div className="mt-2" />
-        <TypeBlock title="ParagraphAttribution" fields={[
-          ["index", "number", "Paragraph index (0-based)"],
-          ["textPrefix", "string", "First ~50 chars (for matching)"],
-          ["lastEditBy", "Attribution", "{ userId, userName, at }"],
-        ]} />
-        <div className="mt-3 text-xs text-muted-foreground">
-          Helper: <Code>getWriting(snapshot, sectionId)</Code>
-        </div>
-      </section>
-
-      {/* Dependencies */}
-      <section>
-        <SectionTitle>snapshot.dependencies <span className="text-muted-foreground font-normal">— Relationships</span></SectionTitle>
-        <p className="text-xs text-muted-foreground mb-3">
-          Relationships between outline nodes. Declare <Code>requires: {"{ dependencies: true }"}</Code> to use.
-        </p>
-        <TypeBlock title="OutlineDependency" fields={[
-          ["id", "string", "Dependency ID"],
-          ["fromId", "string", "Source node"],
-          ["toId", "string", "Target node"],
-          ["type", "string", "'depends-on' | 'must-be-consistent' | 'builds-upon' | ..."],
-          ["label", "string", "Human-readable label"],
-          ["direction", "'directed' | 'bidirectional'", ""],
-          ["source", "'manual' | 'ai-suggested' | 'ai-confirmed'", "How it was created"],
-          ["confirmed", "boolean", "Whether team has confirmed this"],
-        ]} />
-      </section>
-
-      {/* Team */}
-      <section>
-        <SectionTitle>snapshot.members <span className="text-muted-foreground font-normal">— Team</span></SectionTitle>
-        <p className="text-xs text-muted-foreground mb-3">
-          Team members and current user. Declare <Code>requires: {"{ members: true }"}</Code> to use.
-        </p>
-        <TypeBlock title="DocumentMember" fields={[
-          ["userId", "string", ""],
-          ["name", "string", "Display name"],
-          ["email?", "string", ""],
-          ["role", "'owner' | 'editor' | 'viewer'", ""],
-        ]} />
-        <div className="mt-3 text-xs text-muted-foreground">
-          Also available: <Code>snapshot.currentUserId</Code>
-        </div>
-      </section>
-
-      {/* Meta */}
-      <section>
-        <SectionTitle>snapshot.documentId, snapshot.phase <span className="text-muted-foreground font-normal">— Meta</span></SectionTitle>
-        <p className="text-xs text-muted-foreground mb-3">
-          Document metadata. Always available.
-        </p>
-        <TypeBlock title="Meta fields" fields={[
-          ["documentId", "string", "Document ID"],
-          ["phase", "'setup' | 'writing'", "Current document phase"],
-        ]} />
-      </section>
-
-      {/* Focus (optional) */}
-      <section>
-        <SectionTitle>focus <span className="text-muted-foreground font-normal">— Optional Target</span></SectionTitle>
-        <p className="text-xs text-muted-foreground mb-3">
-          When a function targets a specific section or intent (e.g. during a proposal),
-          it also receives a <Code>FunctionFocus</Code>.
-        </p>
-        <TypeBlock title="FunctionFocus" fields={[
-          ["sectionId", "string", "The section being analyzed"],
-          ["intentId?", "string", "Specific intent within the section"],
-          ["proposedChanges?", "ProposedChange[]", "Changes to evaluate"],
-          ["extra?", "Record<string, unknown>", "Function-specific context"],
-        ]} />
-      </section>
-    </div>
-  );
-}
-
-// ─── Paths Tab ───
-
-function PathsTab({ paths }: { paths: CoordinationPathDefinition[] }) {
-  return (
-    <div className="space-y-10">
-      <section>
-        <p className="text-sm text-muted-foreground leading-relaxed max-w-2xl">
-          A <strong>coordination path</strong> defines how the team handles a proposed change.
-          Each path declares roles, actions, and resolution rules.
-        </p>
-      </section>
-
-      <section>
-        <SectionTitle>Register a new coordination path</SectionTitle>
-        <CodeBlock>{`import { registerCoordinationPath } from '@/lib/coordination-protocol';
-
-registerCoordinationPath({
-  id: 'approval',
-  name: 'Manager Approval',
-  description: 'A designated approver reviews and decides.',
-  icon: 'ShieldCheck',
-  color: 'emerald',              // blue | emerald | indigo | amber
-
-  roles: [
-    { id: 'proposer', label: 'Proposer', description: 'Person proposing', assignment: 'proposer' },
-    { id: 'approver', label: 'Approver', description: 'Designated reviewer', assignment: 'config-designated' },
-  ],
-
-  actions: [
-    { id: 'approve', label: 'Approve', icon: 'Check', availableTo: ['approver'], effect: 'approve' },
-    { id: 'reject', label: 'Reject', icon: 'X', availableTo: ['approver'], effect: 'reject' },
-  ],
-
-  resolution: { type: 'single-approval' },
-
-  configFields: [],
-  defaultConfig: { approver: 'section-owner' },
-  proposerSummary: 'A designated approver will review your change.',
-  receiverSummary: 'You are asked to approve or reject a proposed change.',
-});
-
-// Then wire UI in lib/coordination-ui.ts:
-// ICON_MAP: { ..., ShieldCheck }
-// PATH_LABELS: { approval: { receiverLabel, ctaLabel, actionText } }`}</CodeBlock>
-      </section>
-
-      <section>
-        <SectionTitle>Registered Paths <span className="text-muted-foreground font-normal">({paths.length})</span></SectionTitle>
-        <div className="space-y-3">
-          {paths.map(path => (
-            <PathCard key={path.id} path={path} />
-          ))}
-        </div>
-      </section>
-
-      <section>
-        <SectionTitle>Type Reference</SectionTitle>
-        <TypeBlock title="ResolutionRule" fields={[
-          ["type", "'immediate' | 'single-approval' | 'threshold' | 'proposer-closes' | 'timeout'", "Resolution strategy"],
-          ["thresholdOptions?", "('any' | 'majority' | 'all')[]", "For threshold type"],
-          ["allowTimeout?", "boolean", "Whether timeout is configurable"],
-        ]} />
-      </section>
-    </div>
-  );
-}
-
-// ─── Register Function Section (Form + Code toggle) ───
-
-function RegisterFunctionSection({ onRegistered }: { onRegistered: () => void }) {
-  const [mode, setMode] = useState<'form' | 'code'>('form');
-
-  return (
-    <div>
-      <div className="flex gap-1 mb-4 border rounded-md p-0.5 w-fit bg-muted/30">
-        <button
-          onClick={() => setMode('form')}
-          className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-            mode === 'form' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          Form
-        </button>
-        <button
-          onClick={() => setMode('code')}
-          className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-            mode === 'code' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          Code
-        </button>
-      </div>
-      {mode === 'form' ? (
-        <RegisterFunctionForm onRegistered={onRegistered} />
-      ) : (
-        <CodeRegisterPanel onRegistered={onRegistered} />
-      )}
-    </div>
-  );
-}
-
-// ─── Code Register Panel ───
-
-const CODE_TEMPLATES: Record<string, { label: string; code: string }> = {
-  'word-count': {
-    label: 'Paragraph Word Count (local)',
-    code: `import { registerFunction } from '@/platform/functions/protocol';
-
-registerFunction({
-  id: 'paragraph-word-count',
-  name: 'Paragraph Word Count',
-  description: 'Check each paragraph against a word limit. Highlights paragraphs that are too long.',
-  icon: 'Hash',
-  trigger: 'detection',
-
-  requires: {
-    writing: true,
-  },
-
-  executor: 'local',
-  fn: (input) => {
-    const limit = Number(input.config.limit) || 40;
-    const paragraphs = [];
-
-    for (const w of input.snapshot.writing) {
-      const paras = w.text.split('\\n\\n').filter(p => p.trim());
-      for (const para of paras) {
-        const wordCount = para.split(/\\s+/).length;
-        paragraphs.push({
-          sectionId: w.sectionId,
-          text: para.slice(0, 60) + (para.length > 60 ? '...' : ''),
-          wordCount,
-          limit,
-          over: wordCount > limit,
-        });
-      }
-    }
-
-    const overCount = paragraphs.filter(p => p.over).length;
-    return {
-      data: { paragraphs, overCount, totalCount: paragraphs.length },
-    };
-  },
-
-  outputSchema: {
-    paragraphs: 'Array<{ sectionId, text, wordCount, limit, over }>',
-    overCount: 'number',
-    totalCount: 'number',
-  },
-
-  ui: [
-    {
-      type: 'sentence-highlight',
-      forEach: 'paragraphs',
-      filter: 'item.over',
-      params: {
-        startAnchor: '{{item.text}}',
-        color: 'red',
-        tooltip: '{{item.wordCount}}/{{item.limit}} words',
-      },
-    },
-    {
-      type: 'banner',
-      when: 'overCount > 0',
-      params: {
-        title: 'Word count issues',
-        message: '{{overCount}} of {{totalCount}} paragraphs exceed the limit',
-        severity: 'warning',
-      },
-    },
-  ],
-
-  configFields: [
-    {
-      type: 'number', key: 'limit', label: 'Word limit per paragraph',
-      min: 10, max: 500,
-    },
-  ],
-  defaultConfig: { limit: 40 },
-});`,
-  },
-  'grammar-check': {
-    label: 'Grammar Check (AI prompt)',
-    code: `import { registerFunction } from '@/platform/functions/protocol';
-
-registerFunction({
-  id: 'grammar-check',
-  name: 'Grammar Check',
-  description: 'AI-powered grammar and style checker. Highlights issues at the sentence level.',
-  icon: 'Pencil',
-  trigger: 'detection',
-
-  requires: {
-    writing: true,
-  },
-
-  executor: 'prompt',
-  prompt: {
-    system: \`You are a grammar and style checker for academic writing.
-
-Analyze the writing and find grammar errors, awkward phrasing, and style issues.
-
-Return JSON:
-{
-  "issues": [
-    {
-      "sentence": "the exact sentence with the issue",
-      "type": "grammar" | "style" | "clarity" | "punctuation",
-      "description": "what's wrong",
-      "suggestion": "corrected version"
-    }
-  ],
-  "summary": "brief overall assessment"
-}\`,
-    user: \`## Writing to check
-
-{{writing}}\`,
-    temperature: 0.2,
-  },
-
-  outputSchema: {
-    issues: 'Array<{ sentence, type, description, suggestion }>',
-    summary: 'string',
-  },
-
-  ui: [
-    {
-      type: 'sentence-highlight',
-      forEach: 'issues',
-      params: {
-        startAnchor: '{{item.sentence}}',
-        color: '{{item.type}}',
-        tooltip: '{{item.description}} → {{item.suggestion}}',
-      },
-    },
-    {
-      type: 'banner',
-      when: 'issues.length > 0',
-      params: {
-        title: 'Grammar Check',
-        message: '{{summary}}',
-        severity: 'info',
-      },
-    },
-  ],
-
-  configFields: [],
-  defaultConfig: {},
-});`,
-  },
-  'blank': {
-    label: 'Blank template',
-    code: `import { registerFunction } from '@/platform/functions/protocol';
-
-registerFunction({
-  id: 'my-function',
-  name: 'My Function',
-  description: 'What this function does',
-  icon: 'Sparkles',
-  trigger: 'detection',
-
-  requires: {
-    writing: true,
-  },
-
-  executor: 'prompt',
-  prompt: {
-    system: \`Your system instruction here.
-
-Return JSON:
-{ "items": [...], "summary": "..." }\`,
-    user: \`## Intents
-{{nodes}}
-
-## Writing
-{{writing}}\`,
-  },
-
-  outputSchema: {
-    items: 'Array<{ text: string, status: string }>',
-    summary: 'string',
-  },
-
-  ui: [],
-  configFields: [],
-  defaultConfig: {},
-});`,
-  },
-};
-
-function CodeRegisterPanel({ onRegistered }: { onRegistered: () => void }) {
-  const [selectedTemplate, setSelectedTemplate] = useState<string>('word-count');
-  const [code, setCode] = useState(CODE_TEMPLATES['word-count'].code);
-  const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-
-  const handleTemplateChange = (key: string) => {
-    setSelectedTemplate(key);
-    setCode(CODE_TEMPLATES[key].code);
-    setStatus(null);
-  };
-
-  const handleExecute = async () => {
-    setStatus(null);
-    try {
-      // 1. Register in memory (eval the code)
-      const fn = new Function('registerFunction', code.replace(/import.*from.*;\n?/g, ''));
-      fn(registerFunction);
-
-      // 2. Extract function ID from code
-      const idMatch = code.match(/id:\s*['"`]([^'"`]+)['"`]/);
-      const funcId = idMatch?.[1];
-
-      if (!funcId) {
-        setStatus({ type: 'error', message: 'Could not extract function ID from code' });
-        return;
-      }
-
-      // 3. Save to file (persist)
-      const res = await fetch('/api/dev/save-function', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: funcId, code }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        setStatus({ type: 'error', message: `Registered in memory but failed to save file: ${err.error}` });
-        onRegistered();
-        return;
-      }
-
-      const result = await res.json();
-      setStatus({ type: 'success', message: `Saved to ${result.path}` });
-      onRegistered();
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      setStatus({ type: 'error', message });
-    }
-  };
-
-  return (
-    <div className="border rounded-lg overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2 bg-zinc-950 border-b border-zinc-800">
-        <div className="flex items-center gap-3">
-          <span className="text-[10px] font-mono text-zinc-400">Template:</span>
-          <div className="flex gap-1">
-            {Object.entries(CODE_TEMPLATES).map(([key, { label }]) => (
-              <button
-                key={key}
-                onClick={() => handleTemplateChange(key)}
-                className={`text-[10px] px-2 py-0.5 rounded transition-colors ${
-                  selectedTemplate === key
-                    ? 'bg-zinc-700 text-zinc-200'
-                    : 'text-zinc-500 hover:text-zinc-300'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-      <textarea
-        value={code}
-        onChange={e => setCode(e.target.value)}
-        spellCheck={false}
-        className="w-full text-[12px] font-mono bg-zinc-950 text-zinc-100 px-4 py-3 leading-relaxed resize-y focus:outline-none"
-        rows={30}
-      />
-      <div className="flex items-center gap-3 px-4 py-3 bg-zinc-950 border-t border-zinc-800">
-        <button
-          onClick={handleExecute}
-          className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
-        >
-          <Play className="h-3.5 w-3.5" />
-          Execute
-        </button>
-        {status && (
-          <span className={`text-xs flex items-center gap-1 ${status.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
-            {status.type === 'success' ? <Check className="h-3.5 w-3.5" /> : null}
-            {status.message}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Register Function Form ───
-
-type BindingDraft = {
-  type: string;
-  forEach: string;
-  filter: string;
-  when: string;
-  params: Record<string, string>;
-};
-
-function RegisterFunctionForm({ onRegistered }: { onRegistered: () => void }) {
-  const [id, setId] = useState('');
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [trigger, setTrigger] = useState<'detection' | 'proposal' | 'on-demand'>('detection');
-  const [reqWriting, setReqWriting] = useState(true);
-  const [reqDeps, setReqDeps] = useState(false);
-  const [reqMembers, setReqMembers] = useState(false);
-  const [systemPrompt, setSystemPrompt] = useState('');
-  const [userPrompt, setUserPrompt] = useState('## Intents\n{{nodes}}\n\n## Writing\n{{writing}}');
-  const [outputFields, setOutputFields] = useState<Array<{ key: string; type: string }>>([
-    { key: '', type: '' },
-  ]);
-  const [bindings, setBindings] = useState<BindingDraft[]>([]);
-  const [registered, setRegistered] = useState(false);
-
-  const primitives = getAllPrimitives();
-
-  const handleAddBinding = () => {
-    setBindings([...bindings, { type: 'banner', forEach: '', filter: '', when: '', params: {} }]);
-  };
-
-  const handleRemoveBinding = (idx: number) => {
-    setBindings(bindings.filter((_, i) => i !== idx));
-  };
-
-  const handleBindingChange = (idx: number, field: string, value: string) => {
-    const updated = [...bindings];
-    (updated[idx] as any)[field] = value;
-    setBindings(updated);
-  };
-
-  const handleBindingParamChange = (idx: number, key: string, value: string) => {
-    const updated = [...bindings];
-    updated[idx].params = { ...updated[idx].params, [key]: value };
-    setBindings(updated);
-  };
-
-  const handleRegister = () => {
-    if (!id || !name || !systemPrompt) return;
-
-    const outputSchema: Record<string, string> = {};
-    for (const f of outputFields) {
-      if (f.key) outputSchema[f.key] = f.type;
-    }
-
-    const ui: UIBinding[] = bindings.map(b => {
-      const binding: UIBinding = { type: b.type, params: b.params };
-      if (b.forEach) binding.forEach = b.forEach;
-      if (b.filter) binding.filter = b.filter;
-      if (b.when) binding.when = b.when;
-      return binding;
-    });
-
-    registerFunction({
-      id,
-      name,
-      description,
-      icon: 'Sparkles',
-      trigger,
-      requires: {
-        writing: reqWriting,
-        dependencies: reqDeps,
-        members: reqMembers,
-      },
-      executor: 'prompt',
-      prompt: {
-        system: systemPrompt,
-        user: userPrompt,
-      },
-      outputSchema,
-      ui,
-      configFields: [],
-      defaultConfig: {},
-    });
-
-    setRegistered(true);
-    onRegistered();
-    setTimeout(() => setRegistered(false), 3000);
-  };
-
-  return (
-    <div className="border rounded-lg p-5 space-y-5">
-      {/* ── Meta ── */}
-      <div className="grid grid-cols-3 gap-3">
-        <FieldInput label="ID" placeholder="my-function" value={id} onChange={setId} />
-        <FieldInput label="Name" placeholder="My Function" value={name} onChange={setName} />
-        <div>
-          <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Trigger</label>
-          <select
-            value={trigger}
-            onChange={e => setTrigger(e.target.value as typeof trigger)}
-            className="mt-1 w-full text-xs border rounded-md px-2 py-1.5 bg-background"
-          >
-            <option value="detection">Detection</option>
-            <option value="proposal">Proposal</option>
-            <option value="on-demand">On-demand</option>
-          </select>
-        </div>
-      </div>
-      <FieldInput label="Description" placeholder="What this function does" value={description} onChange={setDescription} />
-
-      {/* ── Requires ── */}
-      <div>
-        <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Data Required</label>
-        <div className="flex gap-4 mt-1.5">
-          <label className="flex items-center gap-1.5 text-xs">
-            <input type="checkbox" checked={reqWriting} onChange={e => setReqWriting(e.target.checked)} className="rounded" />
-            writing
-          </label>
-          <label className="flex items-center gap-1.5 text-xs">
-            <input type="checkbox" checked={reqDeps} onChange={e => setReqDeps(e.target.checked)} className="rounded" />
-            dependencies
-          </label>
-          <label className="flex items-center gap-1.5 text-xs">
-            <input type="checkbox" checked={reqMembers} onChange={e => setReqMembers(e.target.checked)} className="rounded" />
-            members
-          </label>
-        </div>
-      </div>
-
-      {/* ── Prompt ── */}
-      <div>
-        <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">System Prompt</label>
-        <textarea
-          value={systemPrompt}
-          onChange={e => setSystemPrompt(e.target.value)}
-          rows={6}
-          placeholder="You analyze writing against intents...&#10;&#10;Return JSON:&#10;{ &quot;sentences&quot;: [...], &quot;summary&quot;: &quot;...&quot; }"
-          className="mt-1 w-full text-xs font-mono border rounded-md px-3 py-2 bg-background resize-y"
-        />
-      </div>
-      <div>
-        <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
-          User Prompt Template
-          <span className="font-normal text-muted-foreground/60 ml-2">
-            {"{{nodes}} {{writing}} {{dependencies}} {{focus}} {{config}}"}
-          </span>
-        </label>
-        <textarea
-          value={userPrompt}
-          onChange={e => setUserPrompt(e.target.value)}
-          rows={4}
-          className="mt-1 w-full text-xs font-mono border rounded-md px-3 py-2 bg-background resize-y"
-        />
-      </div>
-
-      {/* ── Output Schema ── */}
-      <div>
-        <div className="flex items-center justify-between">
-          <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Output Schema</label>
-          <button onClick={() => setOutputFields([...outputFields, { key: '', type: '' }])} className="text-[10px] text-primary hover:underline flex items-center gap-0.5">
-            <Plus className="h-3 w-3" /> Add field
-          </button>
-        </div>
-        <div className="space-y-1.5 mt-1.5">
-          {outputFields.map((field, i) => (
-            <div key={i} className="flex gap-2 items-center">
-              <input
-                value={field.key}
-                onChange={e => {
-                  const updated = [...outputFields];
-                  updated[i].key = e.target.value;
-                  setOutputFields(updated);
-                }}
-                placeholder="field name"
-                className="flex-1 text-xs font-mono border rounded-md px-2 py-1.5 bg-background"
-              />
-              <input
-                value={field.type}
-                onChange={e => {
-                  const updated = [...outputFields];
-                  updated[i].type = e.target.value;
-                  setOutputFields(updated);
-                }}
-                placeholder="type (e.g. Array<{ text, status }>, string, number)"
-                className="flex-[2] text-xs font-mono border rounded-md px-2 py-1.5 bg-background"
-              />
-              <button onClick={() => setOutputFields(outputFields.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-red-500">
-                <Trash2 className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* ── UI Bindings ── */}
-      <div>
-        <div className="flex items-center justify-between">
-          <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">UI Bindings</label>
-          <button onClick={handleAddBinding} className="text-[10px] text-primary hover:underline flex items-center gap-0.5">
-            <Plus className="h-3 w-3" /> Add binding
-          </button>
-        </div>
-        <div className="space-y-3 mt-2">
-          {bindings.map((binding, i) => {
-            const primDef = primitives.find(p => p.type === binding.type);
-            return (
-              <div key={i} className="border rounded-md p-3 space-y-2 bg-muted/10">
-                <div className="flex items-center gap-2">
-                  <select
-                    value={binding.type}
-                    onChange={e => handleBindingChange(i, 'type', e.target.value)}
-                    className="text-xs border rounded-md px-2 py-1 bg-background font-mono"
-                  >
-                    {primitives.map(p => (
-                      <option key={p.type} value={p.type}>{p.type}</option>
-                    ))}
-                  </select>
-                  <span className="text-[10px] text-muted-foreground flex-1">{primDef?.description}</span>
-                  <button onClick={() => handleRemoveBinding(i)} className="text-muted-foreground hover:text-red-500">
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </div>
-
-                {primDef?.supportsIteration && (
-                  <div className="grid grid-cols-2 gap-2">
-                    <FieldInput label="forEach" placeholder="e.g. sentences" value={binding.forEach} onChange={v => handleBindingChange(i, 'forEach', v)} mono />
-                    <FieldInput label="filter" placeholder="e.g. item.status !== 'aligned'" value={binding.filter} onChange={v => handleBindingChange(i, 'filter', v)} mono />
-                  </div>
-                )}
-
-                {!primDef?.supportsIteration && (
-                  <FieldInput label="when" placeholder="e.g. alignedCount < totalCount" value={binding.when} onChange={v => handleBindingChange(i, 'when', v)} mono />
-                )}
-
-                <div>
-                  <label className="text-[10px] text-muted-foreground">Params</label>
-                  <div className="grid grid-cols-2 gap-2 mt-1">
-                    {primDef?.params.map(p => (
-                      <FieldInput
-                        key={p.key}
-                        label={`${p.key}${p.required ? '' : '?'}`}
-                        placeholder={p.description}
-                        value={binding.params[p.key] || ''}
-                        onChange={v => handleBindingParamChange(i, p.key, v)}
-                        mono
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-          {bindings.length === 0 && (
-            <p className="text-xs text-muted-foreground">No UI bindings yet. Your function will run but won&apos;t render anything.</p>
-          )}
-        </div>
-      </div>
-
-      {/* ── Actions ── */}
-      <div className="flex items-center gap-3 pt-2 border-t">
-        <button
-          onClick={handleRegister}
-          disabled={!id || !name || !systemPrompt}
-          className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <Play className="h-3.5 w-3.5" />
-          Register Function
-        </button>
-        {registered && (
-          <span className="text-xs text-emerald-600 flex items-center gap-1">
-            <Check className="h-3.5 w-3.5" /> Registered — see it below in the function list
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Primitive Renderers ───
-// Render ResolvedPrimitive output as actual visual UI for Test Run previews.
-
-const PRIM_RENDERER: Record<string, React.FC<{ params: Record<string, string> }>> = {
-  'banner': ({ params }) => {
-    const s = params.severity || 'info';
-    const style = { warning: 'bg-amber-50 border-amber-200 text-amber-900', error: 'bg-red-50 border-red-200 text-red-900', info: 'bg-blue-50 border-blue-200 text-blue-900', success: 'bg-emerald-50 border-emerald-200 text-emerald-900' }[s] || 'bg-muted border';
-    const icon = { warning: '\u26A0', error: '\u2715', info: '\u2139', success: '\u2713' }[s] || '\u2139';
-    return (<div className={`flex items-start gap-2.5 px-4 py-3 border-b text-xs ${style}`}><span className="text-base leading-none mt-0.5">{icon}</span><div className="flex-1"><div className="font-semibold text-[13px]">{params.title}</div><div className="mt-0.5 opacity-80">{params.message}</div></div></div>);
-  },
-
-  'sentence-highlight': ({ params }) => {
-    const color = params.color || 'yellow';
-    const bg = { red: 'bg-red-100 border-red-300', yellow: 'bg-yellow-100 border-yellow-300', green: 'bg-emerald-100 border-emerald-300', blue: 'bg-blue-100 border-blue-300', orange: 'bg-orange-100 border-orange-300' }[color] || 'bg-yellow-100 border-yellow-300';
-    const dot = { red: 'bg-red-400', yellow: 'bg-yellow-400', green: 'bg-emerald-400', blue: 'bg-blue-400', orange: 'bg-orange-400' }[color] || 'bg-yellow-400';
-    return (<div className={`rounded border px-3 py-2 ${bg}`}><div className="flex items-center gap-2"><span className={`w-2 h-2 rounded-full flex-shrink-0 ${dot}`} /><span className="text-xs">{params.startAnchor}</span></div>{params.tooltip && <div className="text-[11px] text-muted-foreground mt-1 ml-4">{params.tooltip}</div>}</div>);
-  },
-
-  'issue-dot': ({ params }) => {
-    const typeColor = { partial: 'bg-yellow-100 text-yellow-600', missing: 'bg-red-100 text-red-600', orphan: 'bg-orange-100 text-orange-600', conflict: 'bg-purple-100 text-purple-600' }[params.type] || 'bg-muted text-muted-foreground';
-    return (<div className="flex items-center gap-2 px-3 py-1.5"><span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold ${typeColor}`}>{params.index}</span><span className="text-xs">{params.anchor?.slice(0, 50)}</span>{params.detail && <span className="text-[11px] text-muted-foreground ml-auto">{params.detail}</span>}</div>);
-  },
-
-  'inline-widget': ({ params }) => {
-    const variantStyle = { suggestion: 'border-emerald-300 bg-emerald-50/50', missing: 'border-red-300 bg-red-50/50 border-dashed', info: 'border-blue-300 bg-blue-50/50' }[params.variant] || 'border bg-muted/10';
-    const badge = { suggestion: 'bg-emerald-100 text-emerald-700', missing: 'bg-red-100 text-red-700', info: 'bg-blue-100 text-blue-700' }[params.variant] || 'bg-muted';
-    return (<div className={`border-2 rounded-md p-3 ${variantStyle}`}><div className="flex items-center gap-1.5 mb-1.5"><span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${badge}`}>{params.variant}</span>{params.intentRef && <span className="text-[10px] text-muted-foreground italic">for: {params.intentRef}</span>}</div><div className="text-xs text-muted-foreground">{params.content}</div></div>);
-  },
-
-  'ai-marker': ({ params }) => {
-    return (<div className="bg-blue-50/50 border-l-2 border-blue-200 pl-2 px-3 py-1.5"><span className="inline-flex items-center gap-0.5 text-[9px] text-blue-500 font-medium mr-1">{'\u2728'} AI</span><span className="text-xs">{params.startAnchor}</span></div>);
-  },
-
-  'node-icon': ({ params }) => {
-    const icon = { covered: '\u2713', partial: '\u25D1', missing: '\u25CB', 'ai-covered': '\u2728' }[params.status] || '\u25CB';
-    const color = { covered: 'text-emerald-500', partial: 'text-yellow-500', missing: 'text-red-400', 'ai-covered': 'text-blue-500' }[params.status] || 'text-muted-foreground';
-    return (<div className="flex items-center gap-2 px-3 py-1"><span className={color}>{icon}</span><span className="text-xs font-mono text-muted-foreground">{params.nodeId}</span>{params.tooltip && <span className="text-[11px] text-muted-foreground ml-auto">{params.tooltip}</span>}</div>);
-  },
-
-  'node-badge': ({ params }) => {
-    const style = { new: 'bg-emerald-100 text-emerald-700 border-emerald-200', modified: 'bg-blue-100 text-blue-700 border-blue-200', removed: 'bg-red-100 text-red-700 border-red-200', info: 'bg-muted text-muted-foreground border', warning: 'bg-yellow-100 text-yellow-700 border-yellow-200' }[params.variant] || 'bg-muted text-muted-foreground border';
-    return (<div className="flex items-center gap-2 px-3 py-1"><span className="text-xs font-mono text-muted-foreground">{params.nodeId}</span><span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full border ${style}`}>{params.label}</span></div>);
-  },
-
-  'section-alert': ({ params }) => {
-    const borderColor = { warning: 'border-amber-300 bg-amber-50', error: 'border-red-300 bg-red-50', info: 'border-blue-300 bg-blue-50', success: 'border-emerald-300 bg-emerald-50' }[params.severity] || 'border bg-muted/20';
-    return (<div className={`border-l-2 rounded-r-md px-3 py-2 ${borderColor}`}><div className="text-xs font-semibold">{params.title}</div><div className="text-[11px] text-muted-foreground mt-0.5">{params.message}</div><div className="text-[10px] font-mono text-muted-foreground/50 mt-1">section: {params.sectionId}</div></div>);
-  },
-
-  'summary-bar': ({ params }) => {
-    let counts: Record<string, number> = {};
-    try { counts = JSON.parse(params.counts); } catch { /* ignore */ }
-    const dotColor: Record<string, string> = { covered: 'bg-emerald-500', partial: 'bg-yellow-500', missing: 'bg-red-500', 'ai-covered': 'bg-blue-500' };
-    return (<div className="border rounded-lg px-3 py-2 bg-muted/20"><div className="flex items-center gap-2 text-xs"><span className="font-medium">Alignment</span><span className={`text-[10px] px-1.5 py-0.5 rounded ${params.level === 'aligned' ? 'bg-emerald-100 text-emerald-700' : params.level === 'drifted' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>{params.level}</span></div><div className="flex items-center gap-3 mt-1.5">{Object.entries(counts).map(([k, v]) => (<span key={k} className="flex items-center gap-1 text-[11px]"><span className={`w-2 h-2 rounded-full inline-block ${dotColor[k] || 'bg-muted-foreground'}`} />{v} {k}</span>))}</div></div>);
-  },
-
-  'result-list': ({ params }) => {
-    const badgeStyle = { new: 'bg-emerald-100 text-emerald-700', modified: 'bg-blue-100 text-blue-700', removed: 'bg-red-100 text-red-700', warning: 'bg-amber-100 text-amber-700', info: 'bg-muted text-muted-foreground', significant: 'bg-amber-100 text-amber-700', minor: 'bg-blue-100 text-blue-700' }[params.badgeVariant || params.badge] || 'bg-muted text-muted-foreground';
-    return (<div className="border rounded-md overflow-hidden"><div className="flex items-center justify-between px-3 py-2"><span className="text-xs font-medium truncate">{params.title}</span>{params.badge && <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${badgeStyle}`}>{params.badge}</span>}</div>{params.detail && <div className="px-3 py-2 border-t bg-muted/10 text-[11px] text-muted-foreground">{params.detail}</div>}</div>);
-  },
-
-  'diff-view': ({ params }) => {
-    return (<div className="grid grid-cols-2 gap-2 text-[11px]"><div className="border rounded p-2 bg-red-50/30"><div className="text-[9px] font-semibold text-muted-foreground uppercase mb-1">Before</div><p>{params.before}</p></div><div className="border rounded p-2 bg-emerald-50/30"><div className="text-[9px] font-semibold text-muted-foreground uppercase mb-1">After</div><p>{params.after}</p></div></div>);
-  },
-
-  'action-group': ({ params }) => {
-    let actions: Array<{ label: string; variant: string }> = [];
-    try { actions = JSON.parse(params.actions); } catch { /* ignore */ }
-    return (<div className="flex gap-2 pt-2 border-t">{actions.map((a, i) => (<button key={i} className={`text-[11px] px-3 py-1.5 rounded-md ${a.variant === 'primary' ? 'bg-primary text-primary-foreground' : a.variant === 'destructive' ? 'border text-red-600 border-red-200' : 'border'}`}>{a.label}</button>))}</div>);
-  },
-};
-
-/** Render a single ResolvedPrimitive using the appropriate renderer */
-function RenderPrimitive({ prim }: { prim: ResolvedPrimitive }) {
-  const Renderer = PRIM_RENDERER[prim.type];
-  if (!Renderer) {
-    return <div className="text-[11px] text-muted-foreground font-mono px-3 py-1">[{prim.type}] {JSON.stringify(prim.params)}</div>;
-  }
-  return <Renderer params={prim.params} />;
-}
-
-function FieldInput({ label, placeholder, value, onChange, mono }: {
-  label: string; placeholder: string; value: string; onChange: (v: string) => void; mono?: boolean;
-}) {
-  return (
-    <div>
-      <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">{label}</label>
-      <input
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        placeholder={placeholder}
-        className={`mt-1 w-full text-xs border rounded-md px-2 py-1.5 bg-background ${mono ? 'font-mono' : ''}`}
-      />
-    </div>
-  );
-}
-
-// ─── Cards ───
-
-// Mock snapshot for testing functions
 const now = Date.now();
-const mockAttribution = { userId: 'user-1', userName: 'Alice', at: now };
-
+const mockAttr = { userId: 'user-1', userName: 'Alice', at: now };
+const mockAttr2 = { userId: 'user-2', userName: 'Bob', at: now };
 const MOCK_SNAPSHOT: DocumentSnapshot = {
-  documentId: 'mock-doc',
-  currentUserId: 'user-1',
-  phase: 'writing',
+  documentId: 'mock-doc', phase: 'writing', currentUserId: 'user-1',
   nodes: [
-    { id: 'sec-1', content: 'Introduction', parentId: null, position: 0, level: 0, createdBy: mockAttribution },
-    { id: 'intent-1a', content: 'Motivate the problem with a real-world example', parentId: 'sec-1', position: 0, level: 1, createdBy: mockAttribution },
-    { id: 'intent-1b', content: 'State the research question clearly', parentId: 'sec-1', position: 1, level: 1, createdBy: mockAttribution },
-    { id: 'sec-2', content: 'Related Work', parentId: null, position: 1, level: 0, createdBy: mockAttribution },
-    { id: 'intent-2a', content: 'Compare with existing approaches', parentId: 'sec-2', position: 0, level: 1, createdBy: mockAttribution },
+    // Section 1: Introduction (Alice)
+    { id: 'sec-1', content: 'Introduction: Motivation and research questions for collaborative writing support', position: 0, parentId: null, level: 0, createdBy: mockAttr },
+    { id: 'sec-1-1', content: 'Collaborative writing is challenging because teams must maintain shared understanding of what to write', position: 0, parentId: 'sec-1', level: 1, createdBy: mockAttr },
+    { id: 'sec-1-2', content: 'Current tools lack semantic awareness of author intentions and cross-section dependencies', position: 1, parentId: 'sec-1', level: 1, createdBy: mockAttr },
+    { id: 'sec-1-3', content: 'We propose intent-level coordination as a new paradigm for collaborative writing', position: 2, parentId: 'sec-1', level: 1, createdBy: mockAttr },
+    // Section 2: Related Work (Bob)
+    { id: 'sec-2', content: 'Related Work: Previous approaches to collaborative editing and coordination', position: 1, parentId: null, level: 0, createdBy: mockAttr2 },
+    { id: 'sec-2-1', content: 'Real-time collaborative editing systems and their limitations', position: 0, parentId: 'sec-2', level: 1, createdBy: mockAttr2 },
+    { id: 'sec-2-2', content: 'Awareness and coordination in CSCW literature', position: 1, parentId: 'sec-2', level: 1, createdBy: mockAttr2 },
+    // Section 3: System (Alice)
+    { id: 'sec-3', content: 'System Design: Architecture and implementation', position: 2, parentId: null, level: 0, createdBy: mockAttr },
+    { id: 'sec-3-1', content: 'Living outline as the shared understanding representation', position: 0, parentId: 'sec-3', level: 1, createdBy: mockAttr },
   ],
   writing: [
-    {
-      sectionId: 'sec-1',
-      html: '',
-      text: 'Collaborative writing is hard. When multiple authors work on the same document, they often lose track of each other\'s intentions. This leads to inconsistencies and conflicts that are difficult to resolve.\n\nOur system addresses this by introducing intent-aware coordination. We propose a framework where each section of a document is grounded in explicit intents, and changes are evaluated against these intents before being applied. The key research question is: how can we automate the detection of intent drift in collaborative documents?',
-      wordCount: 72,
-      paragraphs: [],
-    },
-    {
-      sectionId: 'sec-2',
-      html: '',
-      text: 'Previous work on collaborative writing has focused primarily on conflict resolution at the text level. Systems like Google Docs and Notion provide real-time synchronization but lack semantic awareness of author intentions. Track changes in Microsoft Word offers a review workflow but does not connect changes to the document\'s underlying goals.',
-      wordCount: 51,
-      paragraphs: [],
-    },
+    { sectionId: 'sec-1', html: '', text: 'Collaborative writing is one of the most common forms of knowledge work. When multiple authors work on a shared document, they must continuously negotiate what to write, how to organize it, and how individual contributions fit together. This negotiation is the essence of collaborative writing — yet current tools provide almost no support for it. Existing systems like Google Docs and Notion offer real-time text synchronization, but they operate entirely at the character level without understanding what each author intends to communicate. We argue that a fundamentally different approach is needed: one that separates shared understanding from individual writing, makes cross-section dependencies explicit, and provides structured coordination when conflicts arise.', wordCount: 112, paragraphs: [] },
+    { sectionId: 'sec-2', html: '', text: 'Previous work on collaborative writing has focused primarily on conflict resolution at the text level. Systems like Google Docs provide real-time synchronization using operational transformation, while newer tools like Notion use block-based editing. However, these approaches treat writing as a sequence of characters rather than a structured expression of team intent. The CSCW literature has long recognized the importance of awareness in collaboration, but existing frameworks focus on presence awareness rather than semantic awareness of how individual work relates to team goals.', wordCount: 85, paragraphs: [] },
+    { sectionId: 'sec-3', html: '', text: 'Our system introduces a three-layer architecture built around a living outline that serves as the team\'s shared understanding.', wordCount: 20, paragraphs: [] },
   ],
   dependencies: [
-    { id: 'dep-1', fromId: 'sec-1', toId: 'sec-2', type: 'supports', label: 'Introduction motivates related work', direction: 'directed', source: 'manual', confirmed: true, createdBy: mockAttribution },
+    { id: 'dep-1', fromId: 'sec-1', toId: 'sec-2', type: 'supports', label: 'Introduction motivates related work', direction: 'directed', source: 'manual', confirmed: true, createdBy: mockAttr },
+    { id: 'dep-2', fromId: 'sec-2', toId: 'sec-3', type: 'supports', label: 'Related work gaps motivate system design', direction: 'directed', source: 'manual', confirmed: true, createdBy: mockAttr2 },
+    { id: 'dep-3', fromId: 'sec-1-3', toId: 'sec-3-1', type: 'depends-on', label: 'Proposal connects to implementation', direction: 'directed', source: 'ai-suggested', confirmed: true, createdBy: mockAttr },
   ],
   assignments: [
     { sectionId: 'sec-1', assigneeId: 'user-1', assigneeName: 'Alice', assignedAt: now },
     { sectionId: 'sec-2', assigneeId: 'user-2', assigneeName: 'Bob', assignedAt: now },
+    { sectionId: 'sec-3', assigneeId: 'user-1', assigneeName: 'Alice', assignedAt: now },
   ],
   members: [
     { userId: 'user-1', name: 'Alice', role: 'owner', email: 'alice@example.com', joinedAt: now },
     { userId: 'user-2', name: 'Bob', role: 'editor', email: 'bob@example.com', joinedAt: now },
+    { userId: 'user-3', name: 'Carol', role: 'editor', email: 'carol@example.com', joinedAt: now },
   ],
 };
 
-function FunctionCard({ func }: { func: FunctionDefinition }) {
-  const [open, setOpen] = useState(false);
+// Preview primitives for Foundation
+const PREVIEW_PRIMITIVES: Record<string, ResolvedPrimitive> = {
+  'banner': { type: 'banner', location: 'global', params: { title: 'Drift detected', message: 'Writing has diverged from the outline.', severity: 'warning' } },
+  'node-icon': { type: 'node-icon', location: 'outline-node', params: { nodeId: 'sec-1', status: 'partial', tooltip: '2 of 4 covered' } },
+  'node-badge': { type: 'node-badge', location: 'outline-node', params: { nodeId: 'sec-1', label: 'modified', variant: 'modified' } },
+  'section-alert': { type: 'section-alert', location: 'outline-node', params: { sectionId: 'sec-2', title: 'Cross-section conflict', message: 'Changes conflict with Method section.', severity: 'warning' } },
+  'summary-bar': { type: 'summary-bar', location: 'outline-node', params: { level: 'partial', counts: '{"covered":3,"partial":2,"missing":1}' } },
+  'sentence-highlight': { type: 'sentence-highlight', location: 'writing-editor', params: { startAnchor: 'Collaborative writing is one of...', color: 'yellow', tooltip: 'Partially covers intent' } },
+  'issue-dot': { type: 'issue-dot', location: 'writing-editor', params: { anchor: 'This negotiation...', type: 'orphan', index: '1', detail: 'No matching intent' } },
+  'inline-widget': { type: 'inline-widget', location: 'writing-editor', params: { variant: 'suggestion', content: 'Consider adding content about synchronization.', intentRef: 'sec-1-2' } },
+  'ai-marker': { type: 'ai-marker', location: 'writing-editor', params: { startAnchor: 'AI-generated paragraph...' } },
+  'result-list': { type: 'result-list', location: 'right-panel', params: { title: 'Method Section', badge: 'significant', badgeVariant: 'warning', detail: 'Research question change affects system design.' } },
+  'diff-view': { type: 'diff-view', location: 'right-panel', params: { before: 'The system uses a centralized architecture.', after: 'The system uses a distributed architecture with CRDTs.' } },
+  'action-group': { type: 'action-group', location: 'right-panel', params: { actions: JSON.stringify([{ label: 'Propose Change', action: 'propose', variant: 'primary' }, { label: 'Dismiss', action: 'dismiss', variant: 'default' }]) } },
+  'text-input': { type: 'text-input', location: 'right-panel', params: { label: 'What changed?', placeholder: 'Explain your reasoning...', action: 'set-reasoning', rows: '2' } },
+  'comment-thread': { type: 'comment-thread', location: 'right-panel', params: { author: 'Alice', action: 'approve', text: 'Looks good.' } },
+  'progress-bar': { type: 'progress-bar', location: 'right-panel', params: { current: '3', total: '5', label: '3/5 approved', variant: 'success' } },
+};
+
+type MajorTab = 'foundation' | 'functions' | 'sense' | 'negotiate';
+
+// ═══════════════════════════════════════════════════════
+// MAIN PAGE
+// ═══════════════════════════════════════════════════════
+
+export default function DevPage() {
+  const [tab, setTab] = useState<MajorTab>('foundation');
+  const [functions, setFunctions] = useState(getAllFunctions);
+  const [senseProtocols, setSenseProtocols] = useState(getAllSenseProtocols);
+  const [coordinationPaths, setCoordinationPaths] = useState(getAllCoordinationPaths);
+  const refresh = useCallback(() => setFunctions(getAllFunctions()), []);
+  const refreshSense = useCallback(() => setSenseProtocols(getAllSenseProtocols()), []);
+  const refreshCoordination = useCallback(() => setCoordinationPaths(getAllCoordinationPaths()), []);
+
+  // Load saved custom functions on mount
+  useEffect(() => {
+    fetch('/api/dev/save-function?type=function')
+      .then(res => res.json())
+      .then(({ functions: saved }) => {
+        if (!saved?.length) return;
+        let count = 0;
+        for (const { code } of saved as Array<{ id: string; code: string }>) {
+          try {
+            const stripped = code.replace(/import.*from.*;\n?/g, '');
+            new Function('registerFunction', stripped)(registerFunction);
+            count++;
+          } catch (e) { console.warn('[dev] Failed to load custom function:', e); }
+        }
+        if (count > 0) setFunctions(getAllFunctions());
+      })
+      .catch(() => {});
+  }, []);
+
+  // Load saved custom sense protocols on mount
+  useEffect(() => {
+    fetch('/api/dev/save-function?type=sense')
+      .then(res => res.json())
+      .then(({ functions: saved }) => {
+        if (!saved?.length) return;
+        let count = 0;
+        for (const { code } of saved as Array<{ id: string; code: string }>) {
+          try {
+            const stripped = code.replace(/import.*from.*;\n?/g, '');
+            new Function('registerSenseProtocol', stripped)(registerSenseProtocol);
+            count++;
+          } catch (e) { console.warn('[dev] Failed to load custom sense protocol:', e); }
+        }
+        if (count > 0) setSenseProtocols(getAllSenseProtocols());
+      })
+      .catch(() => {});
+  }, []);
+
+  // Load saved custom coordination paths on mount
+  useEffect(() => {
+    fetch('/api/dev/save-function?type=coordination')
+      .then(res => res.json())
+      .then(({ functions: saved }) => {
+        if (!saved?.length) return;
+        let count = 0;
+        for (const { code } of saved as Array<{ id: string; code: string }>) {
+          try {
+            const stripped = code.replace(/import.*from.*;\n?/g, '');
+            new Function('registerCoordinationPath', stripped)(registerCoordinationPath);
+            count++;
+          } catch (e) { console.warn('[dev] Failed to load custom coordination path:', e); }
+        }
+        if (count > 0) setCoordinationPaths(getAllCoordinationPaths());
+      })
+      .catch(() => {});
+  }, []);
+
+  const primitives = getAllPrimitives();
+
+  return (
+    <div className="min-h-screen bg-background dev-ref">
+      <style>{`
+        .dev-ref { font-size: 16px; line-height: 1.6; color: #1a1a1a; }
+        .dev-ref .text-muted-foreground { color: #555; }
+        .dev-ref code { font-size: 14px; }
+        .dev-ref pre { font-size: 14px; }
+      `}</style>
+
+      {/* Header */}
+      <header className="border-b bg-card">
+        <div className="max-w-6xl mx-auto px-6 py-6">
+          <div className="text-sm font-mono text-muted-foreground mb-1">GroundingKit</div>
+          <h1 className="text-3xl font-bold tracking-tight">Developer Reference</h1>
+          <p className="text-lg text-muted-foreground mt-1">
+            Build coordination capabilities for collaborative writing.
+          </p>
+        </div>
+      </header>
+
+      {/* Major tabs */}
+      <div className="border-b bg-card sticky top-0 z-20">
+        <div className="max-w-6xl mx-auto px-6 flex gap-0">
+          <MajorTabBtn active={tab === 'foundation'} onClick={() => setTab('foundation')} icon={<Layers className="h-4 w-4" />}>Foundation</MajorTabBtn>
+          <MajorTabBtn active={tab === 'functions'} onClick={() => setTab('functions')} icon={<Code className="h-4 w-4" />}>Functions <Badge>{functions.length}</Badge></MajorTabBtn>
+          <MajorTabBtn active={tab === 'sense'} onClick={() => setTab('sense')} icon={<Eye className="h-4 w-4" />}>Sense <Badge>{senseProtocols.length}</Badge></MajorTabBtn>
+          <MajorTabBtn active={tab === 'negotiate'} onClick={() => setTab('negotiate')} icon={<Users className="h-4 w-4" />}>Negotiate <Badge>{coordinationPaths.length}</Badge></MajorTabBtn>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="max-w-6xl mx-auto">
+        {tab === 'foundation' && <FoundationContent primitives={primitives} />}
+        {tab === 'functions' && <FunctionsContent functions={functions} onRefresh={refresh} />}
+        {tab === 'sense' && <SenseContent protocols={senseProtocols} onRefresh={refreshSense} />}
+        {tab === 'negotiate' && <NegotiateContent paths={coordinationPaths} onRefresh={refreshCoordination} />}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// FOUNDATION TAB
+// ═══════════════════════════════════════════════════════
+
+function FoundationContent({ primitives }: { primitives: PrimitiveDefinition[] }) {
+  const byLocation: Record<string, PrimitiveDefinition[]> = {};
+  for (const p of primitives) { (byLocation[p.location] ??= []).push(p); }
+
+  const locInfo: Record<string, { label: string; desc: string; color: string }> = {
+    'global': { label: 'Global', desc: 'Top-level banners and alerts', color: 'bg-amber-50 text-amber-700 border-amber-200' },
+    'outline-node': { label: 'Outline View', desc: 'Icons, badges, alerts on outline nodes', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+    'writing-editor': { label: 'Writing View', desc: 'Inline highlights, dots, widgets', color: 'bg-blue-50 text-blue-700 border-blue-200' },
+    'right-panel': { label: 'Panel', desc: 'Cards, diffs, inputs, threads', color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
+  };
+
+  return (
+    <SidebarLayout
+      sidebar={[
+        { heading: 'DATA MODEL', items: [{ id: 'dm-overview', label: 'Overview' }, { id: 'dm-snapshot', label: 'DocumentSnapshot' }] },
+        { heading: 'UI PRIMITIVES', items: [{ id: 'prim-overview', label: 'Overview' }, ...(['global', 'outline-node', 'writing-editor', 'right-panel'] as const).map(loc => ({ id: `prim-${loc}`, label: locInfo[loc]?.label ?? loc }))] },
+        { heading: 'DISPLAY BINDINGS', items: [{ id: 'bindings', label: 'Template Syntax' }] },
+      ]}
+    >
+      <SectionBlock id="dm-overview" title="Data Model">
+        <p>Every function receives a <code>DocumentSnapshot</code> — the complete current state of the coordination space. Functions don&apos;t fetch data; the platform assembles it.</p>
+      </SectionBlock>
+
+      <SectionBlock id="dm-snapshot" title="DocumentSnapshot">
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <DataCard title="Structure Layer" subtitle="The coordination space" items={[
+            { name: 'nodes: IntentItem[]', desc: 'Outline nodes (id, content, parentId, position, createdBy)' },
+            { name: 'dependencies: Dependency[]', desc: 'Relationships (fromId, toId, type, label, direction)' },
+            { name: 'writing: WritingContent[]', desc: 'Writing per section (sectionId, text, wordCount, paragraphs)' },
+            { name: 'assignments: SectionAssignment[]', desc: 'Who owns each section' },
+            { name: 'members: DocumentMember[]', desc: 'Team members (userId, name, role)' },
+          ]} />
+          <DataCard title="Interaction Layer" subtitle="Coordination dynamics" items={[
+            { name: 'functionResults: StoredFunctionResult[]', desc: 'Previous function outputs (for chaining)' },
+            { name: 'proposals: Proposal[]', desc: 'Active/resolved proposals (pathId, changes, votes)' },
+          ]} />
+        </div>
+      </SectionBlock>
+
+      <SectionBlock id="prim-overview" title={`UI Primitives (${primitives.length})`}>
+        <p>Primitives are visual building blocks. Functions declare display bindings that map output to primitives. Each has a fixed render location and typed parameters.</p>
+      </SectionBlock>
+
+      {(['global', 'outline-node', 'writing-editor', 'right-panel'] as const).map(loc => {
+        const prims = byLocation[loc] || [];
+        const info = locInfo[loc];
+        return (
+          <SectionBlock key={loc} id={`prim-${loc}`} title={`${info.label} (${prims.length})`}>
+            <div className="space-y-3">
+              {prims.map(prim => <PrimitiveDoc key={prim.type} prim={prim} />)}
+            </div>
+          </SectionBlock>
+        );
+      })}
+
+      <SectionBlock id="bindings" title="Display Bindings">
+        <p className="mb-3">Functions map output to primitives using <code>{"{{field}}"}</code> template syntax.</p>
+        <CodeBlock>{`// Scalar: show one primitive when condition is true
+{ type: 'banner', when: 'level === "drifted"',
+  params: { title: 'Drift detected', message: '{{summary}}', severity: 'warning' } }
+
+// Array: one primitive per item
+{ type: 'node-icon', forEach: 'alignedIntents',
+  filter: 'item.coverageStatus !== "covered"',
+  params: { nodeId: '{{item.id}}', status: '{{item.coverageStatus}}' } }`}</CodeBlock>
+      </SectionBlock>
+    </SidebarLayout>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// FUNCTIONS TAB
+// ═══════════════════════════════════════════════════════
+
+function FunctionsContent({ functions, onRefresh }: { functions: FunctionDefinition[]; onRefresh: () => void }) {
+  return (
+    <SidebarLayout
+      sidebar={[
+        { heading: 'SPECIFICATION', items: [
+          { id: 'fn-overview', label: 'Overview' },
+          { id: 'fn-api', label: 'registerFunction()' },
+          { id: 'fn-executors', label: 'Executor Types' },
+          { id: 'fn-display', label: 'Display Bindings' },
+          { id: 'fn-example', label: 'Complete Example' },
+        ]},
+        { heading: 'REGISTER & TEST', items: [{ id: 'fn-register', label: 'Register Custom' }] },
+        { heading: `CATALOG (${functions.length})`, items: functions.map(f => ({ id: `fn-${f.id}`, label: f.name })) },
+      ]}
+    >
+      <SectionBlock id="fn-overview" title="Overview">
+        <p>A function declares three concerns:</p>
+        <ol className="list-decimal pl-6 space-y-1 mt-2">
+          <li><strong>Executor</strong> — how to compute (AI prompt, JS function, or API call)</li>
+          <li><strong>Output</strong> — what it produces (typed schema)</li>
+          <li><strong>Display</strong> — how to render (bindings to UI primitives)</li>
+        </ol>
+        <p className="mt-2">Functions don&apos;t know when or by whom they run — that&apos;s defined by Sense and Negotiate protocols.</p>
+      </SectionBlock>
+
+      <SectionBlock id="fn-api" title="registerFunction(definition)">
+        <FieldTable fields={[
+          ['id', 'string', 'required', 'Unique identifier'],
+          ['name', 'string', 'required', 'Display name'],
+          ['description', 'string', 'required', 'What it does'],
+          ['icon', 'string', 'required', 'Lucide icon name'],
+          ['executor', '"prompt" | "local" | "api"', 'required', 'How to compute'],
+          ['prompt', '{ system, user, model?, temperature? }', 'if prompt', 'AI prompt template with {{variables}}'],
+          ['fn', '(input) => { data }', 'if local', 'JS function'],
+          ['endpoint', 'string', 'if api', 'HTTP POST endpoint'],
+          ['requires', '{ writing?, dependencies?, members? }', 'required', 'Data needs'],
+          ['outputSchema', 'Record<string, string>', 'required', 'Output shape'],
+          ['ui', 'UIBinding[]', 'required', 'Display bindings'],
+          ['configFields', 'ConfigField[]', 'required', 'Config fields (or [])'],
+          ['defaultConfig', 'Record<string, unknown>', 'required', 'Default config (or {})'],
+          ['dependsOn', 'string[]', 'optional', 'Functions whose results to read'],
+        ]} />
+      </SectionBlock>
+
+      <SectionBlock id="fn-executors" title="Executor Types">
+        <div className="space-y-4">
+          <div className="border rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2"><span className="font-mono font-bold text-purple-600 bg-purple-50 px-2 py-0.5 rounded">prompt</span><span className="text-muted-foreground">AI model + prompt template</span></div>
+            <p className="text-muted-foreground mb-2">Platform calls AI, parses JSON output, renders results.</p>
+            <CodeBlock>{`prompt: {
+  system: 'Analyze alignment. Return JSON only.',
+  user: '## Outline\\n{{nodes}}\\n## Writing\\n{{writing}}',
+  model: 'gpt-4o',        // default
+  temperature: 0.3,        // default
+}`}</CodeBlock>
+            <div className="mt-2 text-sm"><strong>Template variables:</strong> <code>{"{{nodes}}"}</code> <code>{"{{writing}}"}</code> <code>{"{{dependencies}}"}</code> <code>{"{{focus}}"}</code> <code>{"{{config}}"}</code></div>
+          </div>
+          <div className="border rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2"><span className="font-mono font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">local</span><span className="text-muted-foreground">JavaScript in browser</span></div>
+            <CodeBlock>{`fn: async (input) => ({
+  data: { score: input.snapshot.writing.length > 0 ? 80 : 0 }
+})`}</CodeBlock>
+          </div>
+          <div className="border rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2"><span className="font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">api</span><span className="text-muted-foreground">HTTP POST to endpoint</span></div>
+            <CodeBlock>{`endpoint: '/api/my-check'
+// Platform POSTs { snapshot, focus, config }
+// Expects { result: { ... } }`}</CodeBlock>
+          </div>
+        </div>
+      </SectionBlock>
+
+      <SectionBlock id="fn-display" title="Display Bindings">
+        <p className="mb-3">The <code>ui</code> array maps output to primitives. See Foundation tab for all 15 primitive types.</p>
+        <CodeBlock>{`ui: [
+  // One banner when condition is true
+  { type: 'banner', when: 'level === "drifted"',
+    params: { title: 'Drift', message: '{{summary}}', severity: 'warning' } },
+  // One icon per array item
+  { type: 'node-icon', forEach: 'intents',
+    params: { nodeId: '{{item.id}}', status: '{{item.status}}' } },
+]`}</CodeBlock>
+      </SectionBlock>
+
+      <SectionBlock id="fn-example" title="Complete Example">
+        <CodeBlock>{`registerFunction({
+  id: 'check-drift', name: 'Drift Detection',
+  description: 'Compares writing against outline.',
+  icon: 'Eye', executor: 'prompt',
+  prompt: { system: '...', user: '{{nodes}}\\n{{writing}}', temperature: 0.2 },
+  requires: { writing: true },
+  outputSchema: { level: 'string', alignedIntents: 'array', summary: 'string' },
+  ui: [
+    { type: 'node-icon', forEach: 'alignedIntents',
+      params: { nodeId: '{{item.id}}', status: '{{item.coverageStatus}}' } },
+    { type: 'banner', when: 'level === "drifted"',
+      params: { title: 'Drift detected', message: '{{summary}}', severity: 'warning' } },
+  ],
+  configFields: [], defaultConfig: {},
+});`}</CodeBlock>
+      </SectionBlock>
+
+      <SectionBlock id="fn-register" title="Register & Test">
+        <RegisterPanel onRegistered={onRefresh} />
+      </SectionBlock>
+
+      {/* ─── Library divider ─── */}
+      <div className="relative py-4">
+        <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border" /></div>
+        <div className="relative flex justify-center">
+          <span className="bg-background px-4 text-sm font-bold text-muted-foreground uppercase tracking-widest">
+            Function Library ({functions.length})
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4">
+        {functions.map(func => (
+          <div key={func.id} id={`fn-${func.id}`} className="scroll-mt-[60px] border rounded-lg overflow-hidden">
+            <FunctionLibraryCard func={func} />
+          </div>
+        ))}
+      </div>
+    </SidebarLayout>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// SENSE TAB
+// ═══════════════════════════════════════════════════════
+
+function SenseContent({ protocols, onRefresh }: { protocols: SenseProtocolDefinition[]; onRefresh: () => void }) {
+  return (
+    <SidebarLayout
+      sidebar={[
+        { heading: 'WHAT IS A SENSE PROTOCOL', items: [
+          { id: 'aw-overview', label: 'Overview' },
+          { id: 'aw-how', label: 'How It Works' },
+        ]},
+        { heading: 'SPECIFICATION', items: [
+          { id: 'aw-api', label: 'registerSenseProtocol()' },
+          { id: 'aw-triggers', label: 'Trigger Options' },
+          { id: 'aw-gate', label: 'Gate Conditions' },
+        ]},
+        { heading: 'REGISTER & TEST', items: [{ id: 'aw-register', label: 'Register Custom' }] },
+        { heading: `LIBRARY (${protocols.length})`, items: protocols.map(p => ({ id: `aw-${p.id}`, label: p.name })) },
+      ]}
+    >
+      <SectionBlock id="aw-overview" title="Overview">
+        <p>
+          A sense protocol helps individual writers understand the coordination space.
+          It bundles <strong>Functions</strong> (what to compute) + <strong>Triggers</strong> (when to run) + <strong>Gate</strong> (when to suggest team coordination).
+        </p>
+        <p className="mt-2">
+          Users see protocols as toggleable capabilities with trigger selection — they never touch raw functions.
+          When a user enables a protocol and selects a trigger, the platform takes care of invoking the referenced functions
+          at the right time, resolving their display bindings into primitives, and evaluating the gate to determine
+          whether team negotiation should be suggested.
+        </p>
+      </SectionBlock>
+
+      <SectionBlock id="aw-how" title="How It Works">
+        <p className="mb-3">The runtime walks a simple flow when a trigger fires:</p>
+        <div className="flex items-center gap-2 flex-wrap text-sm font-mono py-3 px-4 bg-muted/30 rounded-lg border">
+          <span className="px-2.5 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200">User enables protocol</span>
+          <span className="text-muted-foreground">&#8594;</span>
+          <span className="px-2.5 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200">Selects trigger</span>
+          <span className="text-muted-foreground">&#8594;</span>
+          <span className="px-2.5 py-1 rounded bg-purple-50 text-purple-700 border border-purple-200">Writes</span>
+          <span className="text-muted-foreground">&#8594;</span>
+          <span className="px-2.5 py-1 rounded bg-purple-50 text-purple-700 border border-purple-200">Protocol runs functions</span>
+          <span className="text-muted-foreground">&#8594;</span>
+          <span className="px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">Primitives appear</span>
+          <span className="text-muted-foreground">&#8594;</span>
+          <span className="px-2.5 py-1 rounded bg-amber-50 text-amber-700 border border-amber-200">Gate evaluates</span>
+        </div>
+        <p className="mt-3 text-muted-foreground">
+          If the gate condition is met, the system suggests a negotiate protocol (e.g., Team Vote).
+          The user can accept or override the suggestion.
+        </p>
+      </SectionBlock>
+
+      <SectionBlock id="aw-api" title="registerSenseProtocol(definition)">
+        <FieldTable fields={[
+          ['id', 'string', 'required', 'Unique identifier'],
+          ['name', 'string', 'required', 'Display name (what users see)'],
+          ['description', 'string', 'required', 'What this sense capability does'],
+          ['icon', 'string', 'required', 'Lucide icon name'],
+          ['functions', 'string[]', 'required', 'Function IDs to invoke (from the shared function pool)'],
+          ['triggerOptions', 'TriggerOption[]', 'required', 'Trigger modes for users to choose from'],
+          ['defaultTrigger', 'string', 'required', 'Which trigger is selected by default'],
+          ['gate', '{ conditions, suggestProtocol, allowOverride? }', 'optional', 'When to suggest team negotiation'],
+          ['configFields', 'SenseConfigField[]', 'optional', 'User-tunable parameters'],
+          ['defaultConfig', 'Record<string, unknown>', 'optional', 'Defaults for config fields'],
+        ]} />
+      </SectionBlock>
+
+      <SectionBlock id="aw-triggers" title="Trigger Options">
+        <p className="mb-3">Each trigger option defines when the protocol runs. Users pick one from a dropdown. Common patterns:</p>
+        <div className="space-y-2">
+          {([
+            ['manual', 'User clicks a button to run', 'For expensive or infrequent checks'],
+            ['on-change', 'Runs when the outline or writing changes', 'For lightweight, real-time sensing'],
+            ['interval', 'Runs on a timer (e.g., every 5 minutes)', 'For periodic background monitoring'],
+            ['on-save', 'Runs when the document is saved', 'For pre-save validation checks'],
+          ] as const).map(([value, label, note]) => (
+            <div key={value} className="flex items-start gap-3 border rounded-lg px-4 py-2.5">
+              <code className="font-bold text-sm bg-muted px-2 py-0.5 rounded flex-shrink-0 mt-0.5">{value}</code>
+              <div><div className="text-sm">{label}</div><div className="text-sm text-muted-foreground">{note}</div></div>
+            </div>
+          ))}
+        </div>
+        <CodeBlock>{`triggerOptions: [
+  { value: 'manual', label: 'Manual only' },
+  { value: 'on-change', label: 'When outline changes' },
+  { value: 'interval', label: 'Every 5 minutes',
+    config: { intervalMinutes: 5 } },
+],
+defaultTrigger: 'on-change',`}</CodeBlock>
+      </SectionBlock>
+
+      <SectionBlock id="aw-gate" title="Gate Conditions">
+        <p className="mb-3">
+          A Gate reads function output and suggests a negotiate protocol when conditions are met.
+          This is the bridge between individual sensing and team negotiation — when a function detects
+          something significant, the gate can automatically suggest that the team negotiate.
+        </p>
+        <CodeBlock>{`gate: {
+  conditions: [
+    { description: 'Cross-section impact detected',
+      functionId: 'assess-impact',
+      field: 'impacts',
+      operator: 'is-not-empty' },
+  ],
+  suggestProtocol: 'negotiate',  // → Team Vote
+  allowOverride: true,
+}`}</CodeBlock>
+        <p className="mt-2"><strong>Operators:</strong> <code>equals</code> <code>not-equals</code> <code>gt</code> <code>lt</code> <code>gte</code> <code>lte</code> <code>is-empty</code> <code>is-not-empty</code></p>
+      </SectionBlock>
+
+      <SectionBlock id="aw-register" title="Register & Test">
+        <SenseRegisterPanel onRegistered={onRefresh} />
+      </SectionBlock>
+
+      {/* Library divider */}
+      <div className="relative py-4">
+        <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border" /></div>
+        <div className="relative flex justify-center">
+          <span className="bg-background px-4 text-sm font-bold text-muted-foreground uppercase tracking-widest">
+            Sense Library ({protocols.length})
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4">
+        {protocols.map(p => (
+          <div key={p.id} id={`aw-${p.id}`} className="scroll-mt-[60px] border rounded-lg overflow-hidden p-5">
+            <SenseCard protocol={p} />
+          </div>
+        ))}
+      </div>
+    </SidebarLayout>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// NEGOTIATE TAB
+// ═══════════════════════════════════════════════════════
+
+function NegotiateContent({ paths, onRefresh }: { paths: CoordinationPathDefinition[]; onRefresh: () => void }) {
+  return (
+    <SidebarLayout
+      sidebar={[
+        { heading: 'WHAT IS A NEGOTIATE PROTOCOL', items: [
+          { id: 'co-overview', label: 'Overview' },
+          { id: 'co-stages', label: 'The Three Stages' },
+        ]},
+        { heading: 'SPECIFICATION', items: [
+          { id: 'co-steps', label: 'Step Types' },
+          { id: 'co-actions', label: 'Actions with Steps' },
+          { id: 'co-resolution', label: 'Resolution Rules' },
+          { id: 'co-api', label: 'registerCoordinationPath()' },
+        ]},
+        { heading: 'REGISTER & TEST', items: [{ id: 'co-register', label: 'Register Custom' }] },
+        { heading: `LIBRARY (${paths.length})`, items: paths.map(p => ({ id: `co-${p.id}`, label: p.name })) },
+      ]}
+    >
+      <SectionBlock id="co-overview" title="Overview">
+        <p>
+          A negotiate protocol defines how teams negotiate changes to shared understanding.
+          When a sense gate fires or a user initiates a proposal, the negotiate protocol
+          governs the entire negotiation workflow.
+        </p>
+        <p className="mt-2">
+          Each protocol has three stages: <strong>Propose</strong> (the proposer creates a change request),
+          <strong> Deliberate</strong> (reviewers evaluate the proposal), and <strong>Resolve</strong> (a decision is reached).
+          Each stage is a sequence of steps, and the runtime walks them in order.
+        </p>
+        <p className="mt-2">
+          Actions (approve, reject, counter-propose) can carry their own steps, enabling rich interaction flows.
+          The entire UI is composed from the same primitives used by functions — no hardcoded components.
+        </p>
+      </SectionBlock>
+
+      <SectionBlock id="co-stages" title="The Three Stages">
+        <div className="flex items-center gap-2 flex-wrap text-sm font-mono py-3 px-4 bg-muted/30 rounded-lg border mb-4">
+          <span className="px-2.5 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200">Propose steps</span>
+          <span className="text-muted-foreground">&#8594;</span>
+          <span className="px-2.5 py-1 rounded bg-purple-50 text-purple-700 border border-purple-200">Deliberate steps</span>
+          <span className="text-muted-foreground">&#8594;</span>
+          <span className="px-2.5 py-1 rounded bg-amber-50 text-amber-700 border border-amber-200">Resolution check</span>
+          <span className="text-muted-foreground">&#8594;</span>
+          <span className="px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">Resolve steps</span>
+        </div>
+        <div className="space-y-3">
+          <div className="border rounded-lg p-4">
+            <div className="font-semibold text-blue-700 mb-1">Propose</div>
+            <p className="text-muted-foreground">The proposer sees these steps. Typically: show what changed, run impact analysis, collect reasoning, then submit. The proposer fills in data that reviewers will later see.</p>
+          </div>
+          <div className="border rounded-lg p-4">
+            <div className="font-semibold text-purple-700 mb-1">Deliberate</div>
+            <p className="text-muted-foreground">Reviewers see these steps. Typically: show stored results from Propose (no re-running), display impact cards, then present action buttons. Each action can trigger its own sub-steps.</p>
+          </div>
+          <div className="border rounded-lg p-4">
+            <div className="font-semibold text-emerald-700 mb-1">Resolve</div>
+            <p className="text-muted-foreground">Shown after the resolution rule is satisfied. Typically: a success/failure banner, summary of the decision, and any follow-up actions.</p>
+          </div>
+        </div>
+      </SectionBlock>
+
+      <SectionBlock id="co-steps" title="Step Types">
+        <p className="mb-3">Each stage is a sequence of typed steps. The runtime renders them in order.</p>
+        <div className="space-y-3">
+          <div className="border rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <code className="font-bold text-purple-600 bg-purple-50 px-2 py-0.5 rounded">run-function</code>
+              <span className="text-muted-foreground">Execute a function and render its display bindings</span>
+            </div>
+            <p className="text-sm text-muted-foreground">Example: Run <code>assess-impact</code> and render its impact cards and alerts. The function receives the current proposal context.</p>
+            <CodeBlock>{`{ type: 'run-function', functionId: 'assess-impact' }`}</CodeBlock>
+          </div>
+          <div className="border rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <code className="font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">show-result</code>
+              <span className="text-muted-foreground">Display a stored result without re-running</span>
+            </div>
+            <p className="text-sm text-muted-foreground">Example: Show the impact analysis from the Propose stage so reviewers can see it without waiting for re-computation.</p>
+            <CodeBlock>{`{ type: 'show-result', functionId: 'assess-impact' }`}</CodeBlock>
+          </div>
+          <div className="border rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <code className="font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">show-data</code>
+              <span className="text-muted-foreground">Render proposal data through primitives</span>
+            </div>
+            <p className="text-sm text-muted-foreground">Example: Show the draft items (what changed) as a result-list so the proposer can review their changes before submitting.</p>
+            <CodeBlock>{`{ type: 'show-data', dataKey: 'draftItems',
+  ui: [{ type: 'result-list', forEach: 'draftItems',
+    params: { title: '{{item.content}}', badge: '{{item.status}}' } }] }`}</CodeBlock>
+          </div>
+          <div className="border rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <code className="font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded">ui</code>
+              <span className="text-muted-foreground">Pure coordination UI (inputs, buttons, progress)</span>
+            </div>
+            <p className="text-sm text-muted-foreground">Example: Show a text input for reasoning, or action buttons for voting. These are interactive primitives that collect user input.</p>
+            <CodeBlock>{`{ type: 'ui', ui: [
+  { type: 'text-input', params: { label: 'Why?', placeholder: 'Explain...', action: 'set-reasoning' } },
+] }`}</CodeBlock>
+          </div>
+        </div>
+      </SectionBlock>
+
+      <SectionBlock id="co-actions" title="Actions with Steps">
+        <p className="mb-3">
+          Any action can carry its own steps. A simple approve has no steps — just an effect.
+          A counter-propose might collect a text input and then re-run impact analysis.
+        </p>
+        <CodeBlock>{`actions: [
+  // Simple: no steps
+  { id: 'approve', label: 'Approve', effect: 'approve', availableTo: ['voter'] },
+  // With reasoning input
+  { id: 'reject', label: 'Reject', effect: 'reject', availableTo: ['voter'],
+    steps: [
+      { type: 'ui', ui: [{ type: 'text-input',
+          params: { label: 'Reason', action: 'set-reasoning' } }] },
+    ] },
+  // With function re-run
+  { id: 'counter-propose', label: 'Counter', effect: 'counter-propose', availableTo: ['voter'],
+    steps: [
+      { type: 'ui', ui: [{ type: 'text-input', params: { label: 'Alternative', action: 'set-counter' } }] },
+      { type: 'run-function', functionId: 'assess-impact' },
+      { type: 'run-function', functionId: 'preview-writing-impact' },
+    ] },
+]`}</CodeBlock>
+      </SectionBlock>
+
+      <SectionBlock id="co-resolution" title="Resolution Rules">
+        <p className="mb-3">The resolution rule determines when deliberation ends and the Resolve stage begins.</p>
+        <div className="space-y-2">
+          {([
+            ['single-approval', 'One reviewer approves and the proposal passes'],
+            ['majority-vote', 'More than half of eligible voters approve'],
+            ['unanimous', 'All eligible voters must approve'],
+            ['threshold', 'A configurable number or percentage of approvals needed'],
+          ] as const).map(([type, desc]) => (
+            <div key={type} className="flex items-start gap-3 border rounded-lg px-4 py-2.5">
+              <code className="font-bold text-sm bg-muted px-2 py-0.5 rounded flex-shrink-0 mt-0.5">{type}</code>
+              <span className="text-sm text-muted-foreground">{desc}</span>
+            </div>
+          ))}
+        </div>
+        <CodeBlock>{`resolution: { type: 'majority-vote' }
+// or
+resolution: { type: 'threshold', threshold: 3 }`}</CodeBlock>
+      </SectionBlock>
+
+      <SectionBlock id="co-api" title="registerCoordinationPath(definition)">
+        <FieldTable fields={[
+          ['id', 'string', 'required', 'Unique identifier'],
+          ['name', 'string', 'required', 'Display name'],
+          ['description', 'string', 'required', 'What this protocol does'],
+          ['icon', 'string', 'required', 'Lucide icon name'],
+          ['color', 'string', 'required', 'Tailwind color name (e.g., emerald, violet)'],
+          ['propose', 'NegotiateStage', 'required', 'Propose stage (who, steps, actions?)'],
+          ['deliberate', 'NegotiateStage', 'required', 'Deliberate stage (who, steps, actions?)'],
+          ['resolve', 'NegotiateStage', 'required', 'Resolve stage (who, steps, actions?)'],
+          ['config', 'Record<string, ConfigEntry>', 'optional', 'Config fields (default, options, label)'],
+          ['functions', 'string[]', 'optional', 'Function IDs referenced by this protocol'],
+        ]} />
+      </SectionBlock>
+
+      <SectionBlock id="co-register" title="Register & Test">
+        <NegotiateRegisterPanel onRegistered={onRefresh} />
+      </SectionBlock>
+
+      {/* Library divider */}
+      <div className="relative py-4">
+        <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border" /></div>
+        <div className="relative flex justify-center">
+          <span className="bg-background px-4 text-sm font-bold text-muted-foreground uppercase tracking-widest">
+            Negotiate Library ({paths.length})
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4">
+        {paths.map(p => (
+          <div key={p.id} id={`co-${p.id}`} className="scroll-mt-[60px] border rounded-lg overflow-hidden p-5">
+            <NegotiateCard path={p} />
+          </div>
+        ))}
+      </div>
+    </SidebarLayout>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// LAYOUT: SIDEBAR + CONTENT
+// ═══════════════════════════════════════════════════════
+
+type SidebarGroup = { heading: string; items: { id: string; label: string }[] };
+
+function SidebarLayout({ sidebar, children }: { sidebar: SidebarGroup[]; children: React.ReactNode }) {
+  const [active, setActive] = useState(sidebar[0]?.items[0]?.id ?? '');
+
+  return (
+    <div className="flex gap-0">
+      <nav className="w-[220px] flex-shrink-0 border-r hidden lg:block">
+        <div className="sticky top-[53px] py-4 px-4 space-y-5 max-h-[calc(100vh-53px)] overflow-y-auto">
+          {sidebar.map(group => (
+            <div key={group.heading}>
+              <div className="text-xs font-bold text-muted-foreground/60 uppercase tracking-wider mb-2">{group.heading}</div>
+              {group.items.map(item => (
+                <a
+                  key={item.id}
+                  href={`#${item.id}`}
+                  onClick={() => setActive(item.id)}
+                  className={`block px-2 py-1.5 text-sm rounded transition-colors ${
+                    active === item.id ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >{item.label}</a>
+              ))}
+            </div>
+          ))}
+        </div>
+      </nav>
+      <div className="flex-1 min-w-0 px-8 py-6 space-y-10">{children}</div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// CARDS
+// ═══════════════════════════════════════════════════════
+
+function FunctionLibraryCard({ func }: { func: FunctionDefinition }) {
+  const [expanded, setExpanded] = useState(false);
   const [testRunning, setTestRunning] = useState(false);
   const [testResult, setTestResult] = useState<{ data: Record<string, unknown>; resolved: ResolvedPrimitive[] } | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
 
-  const handleTestRun = async () => {
-    setTestRunning(true);
-    setTestResult(null);
-    setTestError(null);
+  const handleTest = async () => {
+    setTestRunning(true); setTestResult(null); setTestError(null);
     try {
-      // All executors (local, prompt, api) go through runFunction with mock snapshot
-      const result = await runFunction(func.id, {
-        snapshot: MOCK_SNAPSHOT,
-        config: func.defaultConfig,
-      });
-      const resolved = resolveBindings(result.ui, result.data);
-      setTestResult({ data: result.data, resolved });
-    } catch (err: unknown) {
-      setTestError(err instanceof Error ? err.message : String(err));
+      const result = await runFunction(func.id, { snapshot: MOCK_SNAPSHOT, focus: { sectionId: 'sec-1' }, config: func.defaultConfig });
+      setTestResult({ data: result.data, resolved: resolveBindings(result.ui, result.data) });
+    } catch (e: unknown) { setTestError(e instanceof Error ? e.message : String(e)); }
+    finally { setTestRunning(false); }
+  };
+
+  return (
+    <>
+      {/* Header — always visible */}
+      <div className="flex items-center gap-3 px-5 py-4">
+        <button onClick={() => setExpanded(!expanded)} className="flex-shrink-0 text-muted-foreground hover:text-foreground">
+          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-base font-semibold">{func.name}</span>
+            <code className="text-sm text-muted-foreground bg-muted px-2 py-0.5 rounded">{func.id}</code>
+            <span className={`text-sm font-mono px-2 py-0.5 rounded ${
+              func.executor === 'prompt' ? 'bg-purple-50 text-purple-600' :
+              func.executor === 'local' ? 'bg-emerald-50 text-emerald-600' :
+              'bg-blue-50 text-blue-600'
+            }`}>{func.executor}</span>
+          </div>
+          <div className="text-sm text-muted-foreground mt-0.5">{func.description}</div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {func.ui.length > 0 && (
+            <div className="flex gap-1">
+              {func.ui.slice(0, 3).map((u, i) => (
+                <span key={i} className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{u.type}</span>
+              ))}
+              {func.ui.length > 3 && <span className="text-xs text-muted-foreground">+{func.ui.length - 3}</span>}
+            </div>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); handleTest(); }}
+            disabled={testRunning}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md border hover:bg-muted/50 disabled:opacity-40"
+          >
+            <Play className="h-3.5 w-3.5" />
+            {testRunning ? 'Running...' : 'Test'}
+          </button>
+        </div>
+      </div>
+
+      {/* Test results — show below header when available */}
+      {testError && (
+        <div className="mx-5 mb-3 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">{testError}</div>
+      )}
+      {testResult && (
+        <div className="mx-5 mb-4 border rounded-lg overflow-hidden">
+          <div className="px-4 py-2 bg-muted/20 border-b text-sm font-medium flex items-center justify-between">
+            <span>Test Output ({testResult.resolved.length} primitives)</span>
+            <button onClick={() => setTestResult(null)} className="text-xs text-muted-foreground hover:text-foreground">dismiss</button>
+          </div>
+          {testResult.resolved.length > 0 ? (
+            <div className="p-4"><PrimitiveRenderer primitives={testResult.resolved} /></div>
+          ) : (
+            <div className="p-4 text-sm text-muted-foreground">No primitives rendered.</div>
+          )}
+        </div>
+      )}
+
+      {/* Expanded details */}
+      {expanded && (
+        <div className="px-5 pb-4 pt-0 border-t bg-muted/5 space-y-4">
+          <div className="pt-4 flex flex-wrap gap-6">
+            {func.dependsOn?.length ? (
+              <div><Label>Depends On</Label><div className="flex gap-1">{func.dependsOn.map(d => <code key={d} className="bg-muted px-2 py-0.5 rounded text-sm">{d}</code>)}</div></div>
+            ) : null}
+            <div><Label>Requires</Label><div className="flex gap-1.5">{Object.entries(func.requires).filter(([, v]) => v).map(([k]) => <code key={k} className="bg-primary/5 border border-primary/20 px-2 py-0.5 rounded text-sm">{k}</code>)}{Object.values(func.requires).every(v => !v) && <span className="text-sm text-muted-foreground">outline only</span>}</div></div>
+          </div>
+          <div><Label>Output Schema</Label><pre className="font-mono bg-muted/30 rounded-lg px-3 py-2 overflow-x-auto text-sm">{JSON.stringify(func.outputSchema, null, 2)}</pre></div>
+          {func.ui.length > 0 && (
+            <div><Label>Display Bindings ({func.ui.length})</Label>
+              <div className="space-y-1">{func.ui.map((u, i) => (
+                <div key={i} className="font-mono text-sm flex items-center gap-2 flex-wrap">
+                  <span className="px-2 py-0.5 rounded bg-muted">{u.type}</span>
+                  {u.forEach && <span className="text-muted-foreground">forEach: {u.forEach}</span>}
+                  {u.filter && <span className="text-muted-foreground">filter: {u.filter}</span>}
+                  {u.when && <span className="text-muted-foreground">when: {u.when}</span>}
+                </div>
+              ))}</div>
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+function FunctionCard({ func }: { func: FunctionDefinition }) {
+  const [testRunning, setTestRunning] = useState(false);
+  const [testResult, setTestResult] = useState<{ data: Record<string, unknown>; resolved: ResolvedPrimitive[] } | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+
+  const handleTest = async () => {
+    setTestRunning(true); setTestResult(null); setTestError(null);
+    try {
+      const result = await runFunction(func.id, { snapshot: MOCK_SNAPSHOT, focus: { sectionId: 'sec-1' }, config: func.defaultConfig });
+      setTestResult({ data: result.data, resolved: resolveBindings(result.ui, result.data) });
+    } catch (e: unknown) { setTestError(e instanceof Error ? e.message : String(e)); }
+    finally { setTestRunning(false); }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <code className="bg-muted px-2 py-0.5 rounded">{func.id}</code>
+        <span className={`font-mono px-2 py-0.5 rounded ${func.executor === 'prompt' ? 'bg-purple-50 text-purple-600' : func.executor === 'local' ? 'bg-emerald-50 text-emerald-600' : 'bg-blue-50 text-blue-600'}`}>{func.executor}</span>
+        <span className="text-muted-foreground">{func.description}</span>
+      </div>
+      {func.dependsOn?.length ? <div><Label>Depends On</Label><div className="flex gap-1">{func.dependsOn.map(d => <code key={d} className="bg-muted px-2 py-0.5 rounded">{d}</code>)}</div></div> : null}
+      <div><Label>Output</Label><pre className="font-mono bg-muted/30 rounded-lg px-3 py-2 overflow-x-auto text-sm">{JSON.stringify(func.outputSchema, null, 2)}</pre></div>
+      {func.ui.length > 0 && <div><Label>Display ({func.ui.length} bindings)</Label><div className="space-y-1">{func.ui.map((u, i) => <div key={i} className="font-mono text-sm flex items-center gap-2"><span className="px-2 py-0.5 rounded bg-muted">{u.type}</span>{u.forEach && <span className="text-muted-foreground">forEach: {u.forEach}</span>}{u.when && <span className="text-muted-foreground">when: {u.when}</span>}</div>)}</div></div>}
+      <div className="flex gap-2 pt-2 border-t">
+        <button onClick={handleTest} disabled={testRunning} className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md border hover:bg-muted/50 disabled:opacity-40"><FlaskConical className="h-4 w-4" />{testRunning ? 'Running...' : 'Test Run'}</button>
+      </div>
+      {testError && <div className="px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">{testError}</div>}
+      {testResult?.resolved.length ? <div><Label>Rendered</Label><div className="border rounded-lg p-3"><PrimitiveRenderer primitives={testResult.resolved} /></div></div> : null}
+    </div>
+  );
+}
+
+function SenseCard({ protocol }: { protocol: SenseProtocolDefinition }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <code className="bg-muted px-2 py-0.5 rounded">{protocol.id}</code>
+
+        <span className="text-muted-foreground">{protocol.description}</span>
+      </div>
+      <div><Label>Functions</Label><div className="flex gap-1.5">{protocol.functions.map(f => <code key={f} className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded">{f}</code>)}</div></div>
+      <div><Label>Triggers</Label><div className="space-y-1">{protocol.triggerOptions.map(t => <div key={t.value} className="flex items-center gap-2 text-sm"><code className={t.value === protocol.defaultTrigger ? 'bg-primary/10 text-primary px-2 py-0.5 rounded font-medium' : 'bg-muted px-2 py-0.5 rounded'}>{t.value}</code><span className="text-muted-foreground">{t.label}</span>{t.value === protocol.defaultTrigger && <span className="text-primary text-sm">default</span>}</div>)}</div></div>
+
+    </div>
+  );
+}
+
+function NegotiateCard({ path }: { path: CoordinationPathDefinition }) {
+  const ui = getPathUI(path.id);
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        {ui && <ui.Icon className={`h-5 w-5 ${ui.textColor}`} />}
+        <code className="bg-muted px-2 py-0.5 rounded">{path.id}</code>
+        <span className="font-mono text-muted-foreground">resolve: {path.resolve.who}</span>
+        <span className="text-muted-foreground">{path.description}</span>
+      </div>
+      {(['propose', 'deliberate', 'resolve'] as const).map(stage => (
+        <div key={stage}>
+          <Label>{stage.charAt(0).toUpperCase() + stage.slice(1)} (who: {path[stage].who}, {path[stage].steps.length} steps)</Label>
+          <StepList steps={path[stage].steps} />
+          {path[stage].actions && path[stage].actions!.length > 0 && (
+            <div className="mt-1 ml-4 space-y-0.5">
+              {path[stage].actions!.map(a => (
+                <div key={a.id ?? a.label} className="flex items-center gap-2 text-sm">
+                  <code className="font-medium">{a.id ?? '-'}</code>
+                  <span className="text-muted-foreground">{a.label}</span>
+                  {a.who && <span className="text-xs text-muted-foreground">[{a.who.join(', ')}]</span>}
+                  {a.steps?.length ? <span className="text-xs bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded">{a.steps.length} sub-steps</span> : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+      {(['propose', 'deliberate', 'resolve'] as const).map(stage => (
+        <div key={stage}><Label>{stage.charAt(0).toUpperCase() + stage.slice(1)} ({path[stage]?.steps?.length ?? 0} steps)</Label><StepList steps={path[stage]?.steps ?? []} /></div>
+      ))}
+    </div>
+  );
+}
+
+function StepList({ steps }: { steps: ProtocolStep[] }) {
+  return (
+    <div className="space-y-1">
+      {steps.map((step, i) => (
+        <div key={i} className="flex items-center gap-2 text-sm font-mono">
+          <span className="text-muted-foreground w-4 text-right">{i + 1}.</span>
+          {step.run && (
+            <>
+              <span className="px-2 py-0.5 rounded bg-purple-50 text-purple-600">run</span>
+              <span>{step.run}</span>
+            </>
+          )}
+          {step.show && (
+            <>
+              <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-600">show</span>
+              <span>{step.show}</span>
+            </>
+          )}
+          {step.when && <span className="text-muted-foreground text-xs">when: {step.when}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// REGISTER PANEL
+// ═══════════════════════════════════════════════════════
+
+const TEMPLATE_CODE = `registerFunction({
+  id: 'my-check', name: 'My Check', description: 'Custom check.',
+  icon: 'Search', executor: 'local',
+  fn: async (input) => ({
+    data: {
+      sections: input.snapshot.nodes.filter(n => !n.parentId).length,
+      words: input.snapshot.writing.reduce((s, w) => s + w.wordCount, 0),
+    },
+  }),
+  requires: { writing: true },
+  outputSchema: { sections: 'number', words: 'number' },
+  ui: [{ type: 'summary-bar', params: { level: 'aligned', counts: '{"sections":{{sections}},"words":{{words}}}' } }],
+  configFields: [], defaultConfig: {},
+});`;
+
+function RegisterPanel({ onRegistered }: { onRegistered: () => void }) {
+  const [code, setCode] = useState(TEMPLATE_CODE);
+  const [error, setError] = useState<string | null>(null);
+  const [testRunning, setTestRunning] = useState(false);
+  const [testResult, setTestResult] = useState<{ data: Record<string, unknown>; resolved: ResolvedPrimitive[]; def: FunctionDefinition } | null>(null);
+  const [registered, setRegistered] = useState(false);
+
+  // Test WITHOUT registering — parse the code, extract the definition, run it in a sandbox
+  const handleTest = async () => {
+    setError(null); setTestResult(null); setTestRunning(true); setRegistered(false);
+    try {
+      // Parse the code to extract the function definition without actually registering it
+      let capturedDef: FunctionDefinition | null = null;
+      const fakeRegister = (def: FunctionDefinition) => { capturedDef = def; };
+      const stripped = code.replace(/import.*from.*;\n?/g, '');
+      new Function('registerFunction', stripped)(fakeRegister);
+
+      if (!capturedDef) throw new Error('No registerFunction() call found in the code.');
+      const def: FunctionDefinition = capturedDef;
+
+      // Temporarily register to run it
+      registerFunction(def);
+      try {
+        const result = await runFunction(def.id, { snapshot: MOCK_SNAPSHOT, config: def.defaultConfig });
+        const resolved = resolveBindings(result.ui, result.data);
+        setTestResult({ data: result.data, resolved, def });
+      } finally {
+        // Note: can't unregister, but it's fine for dev — will be overwritten on re-test
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setTestRunning(false);
     }
   };
 
+  // Register permanently (add to library + persist to disk)
+  const handleRegister = async () => {
+    if (!testResult?.def) return;
+    try {
+      registerFunction(testResult.def);
+      // Persist to backend
+      await fetch('/api/dev/save-function', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: testResult.def.id, code, type: 'function' }),
+      });
+      setRegistered(true);
+      onRegistered();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   return (
-    <div className="border rounded-lg overflow-hidden">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-muted/30 transition-colors"
-      >
-        {open ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">{func.name}</span>
-            <span className="font-mono text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{func.id}</span>
-          </div>
-          <div className="text-xs text-muted-foreground mt-0.5">{func.description}</div>
+    <div className="space-y-4">
+      <p className="text-muted-foreground">
+        Write a <code>registerFunction()</code> call. <strong>Test it first</strong> against sample data,
+        then add it to the library when you&apos;re satisfied.
+      </p>
+
+      {/* Code editor */}
+      <div className="border rounded-lg overflow-hidden">
+        <div className="bg-muted/30 px-4 py-2.5 border-b flex justify-between items-center">
+          <span className="font-mono text-sm text-muted-foreground">registerFunction()</span>
+          <button
+            onClick={handleTest}
+            disabled={testRunning}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md border bg-background hover:bg-muted/50 disabled:opacity-40"
+          >
+            <Play className="h-4 w-4" />
+            {testRunning ? 'Running...' : 'Test Run'}
+          </button>
         </div>
-        <span className="text-[10px] font-mono text-muted-foreground">{func.executor}{func.endpoint ? ` → ${func.endpoint}` : ''}</span>
-      </button>
+        <textarea
+          value={code}
+          onChange={e => { setCode(e.target.value); setTestResult(null); setRegistered(false); setError(null); }}
+          className="w-full font-mono text-sm p-4 bg-background border-none resize-none focus:outline-none"
+          rows={18}
+          spellCheck={false}
+        />
+      </div>
 
-      {open && (
-        <div className="border-t px-4 py-3 bg-muted/10 space-y-3">
-          {/* Requirements */}
-          <div>
-            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Requires</div>
-            <div className="flex flex-wrap gap-1.5">
-              {Object.entries(func.requires).map(([key, required]) => (
-                <span key={key} className={`font-mono text-[11px] px-2 py-0.5 rounded border ${required ? 'bg-primary/5 border-primary/20' : 'bg-muted/50'}`}>
-                  {key}
-                  {!required && <span className="text-muted-foreground/50 ml-0.5">?</span>}
-                </span>
-              ))}
-              {Object.keys(func.requires).length === 0 && (
-                <span className="text-[11px] text-muted-foreground">outline only</span>
-              )}
-            </div>
-          </div>
-
-          {/* Output schema */}
-          <div>
-            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Output Schema</div>
-            <pre className="text-[11px] font-mono bg-muted/30 rounded px-3 py-2 overflow-x-auto">
-              {JSON.stringify(func.outputSchema, null, 2)}
-            </pre>
-          </div>
-
-          {/* UI components */}
-          {func.ui.length > 0 && (
-            <div>
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">UI Bindings</div>
-              <div className="space-y-1">
-                {func.ui.map((u, i) => (
-                  <div key={i} className="flex items-center gap-2 text-[11px] font-mono">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] ${
-                      u.type === 'banner' ? 'bg-amber-50 text-amber-600' :
-                      u.type === 'inline-badge' ? 'bg-blue-50 text-blue-600' :
-                      u.type === 'inline-highlight' ? 'bg-yellow-50 text-yellow-600' :
-                      u.type === 'side-panel' ? 'bg-indigo-50 text-indigo-600' :
-                      'bg-muted text-muted-foreground'
-                    }`}>{u.type}</span>
-                    {u.forEach && <span className="text-muted-foreground">forEach: {u.forEach}</span>}
-                    {u.filter && <span className="text-muted-foreground">filter: {u.filter}</span>}
-                    {u.when && <span className="text-muted-foreground">when: {u.when}</span>}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Config fields */}
-          {func.configFields.length > 0 && (
-            <div>
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Config Fields</div>
-              <div className="space-y-1">
-                {func.configFields.map((f, i) => (
-                  <div key={i} className="flex items-center gap-2 text-[11px] font-mono">
-                    <span className="text-muted-foreground">{f.type}</span>
-                    <span>{'key' in f ? f.key : ''}</span>
-                    {'options' in f && f.options && (
-                      <span className="text-muted-foreground">
-                        [{(f.options as { value: string }[]).map(o => o.value).join(' | ')}]
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── Test Run ── */}
-          <div className="pt-2 border-t">
-            <button
-              onClick={handleTestRun}
-              disabled={testRunning}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border bg-background hover:bg-muted/50 transition-colors disabled:opacity-40"
-            >
-              <FlaskConical className="h-3.5 w-3.5" />
-              {testRunning ? 'Running...' : 'Test Run'}
-              <span className="text-muted-foreground font-normal ml-1">(mock data)</span>
-            </button>
-
-            {testError && (
-              <div className="mt-2 px-3 py-2 rounded bg-red-50 border border-red-200 text-xs text-red-700 font-mono">
-                {testError}
-              </div>
-            )}
-
-            {testResult && (
-              <div className="mt-3 space-y-4">
-                {/* ── Rendered UI Output ── */}
-                {testResult.resolved.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-                      Rendered Output ({testResult.resolved.length} primitives)
-                    </div>
-                    <div className="border rounded-lg overflow-hidden bg-background">
-                      {/* Group by location and render each section */}
-                      {(() => {
-                        const grouped = groupByLocation(testResult.resolved);
-                        const locationLabels: Record<string, string> = {
-                          'global': 'Global',
-                          'writing-editor': 'Editor',
-                          'outline-node': 'Outline',
-                          'right-panel': 'Panel',
-                        };
-                        const order: Array<'global' | 'writing-editor' | 'outline-node' | 'right-panel'> = ['global', 'outline-node', 'writing-editor', 'right-panel'];
-                        return order.map(loc => {
-                          const prims = grouped[loc];
-                          if (!prims || prims.length === 0) return null;
-                          return (
-                            <div key={loc}>
-                              <div className="px-3 py-1.5 bg-muted/30 border-b text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
-                                {locationLabels[loc]} ({prims.length})
-                              </div>
-                              <div className="space-y-1.5 p-3">
-                                {prims.map((prim, i) => (
-                                  <RenderPrimitive key={`${loc}-${i}`} prim={prim} />
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        });
-                      })()}
-                    </div>
-                  </div>
-                )}
-
-                {testResult.resolved.length === 0 && (
-                  <div className="text-xs text-muted-foreground">
-                    No UI primitives resolved (function has no UI bindings or conditions not met).
-                  </div>
-                )}
-
-                {/* Raw data (collapsed) */}
-                <details className="group">
-                  <summary className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide cursor-pointer hover:text-foreground">
-                    Raw Output Data
-                  </summary>
-                  <pre className="mt-1 text-[11px] font-mono bg-zinc-950 text-zinc-100 rounded-lg px-4 py-3 overflow-x-auto max-h-60 overflow-y-auto">
-                    {JSON.stringify(testResult.data, null, 2)}
-                  </pre>
-                </details>
-              </div>
-            )}
-          </div>
+      {/* Error */}
+      {error && (
+        <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+          <strong>Error:</strong> {error}
         </div>
       )}
-    </div>
-  );
-}
 
-function PathCard({ path }: { path: CoordinationPathDefinition }) {
-  const [open, setOpen] = useState(false);
-  const ui = getPathUI(path.id);
-
-  return (
-    <div className="border rounded-lg overflow-hidden">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-muted/30 transition-colors"
-      >
-        {open ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
-        {ui && <ui.Icon className={`h-4 w-4 ${ui.textColor} flex-shrink-0`} />}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">{path.name}</span>
-            <span className="font-mono text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{path.id}</span>
-            {ui && (
-              <span className={`text-[10px] px-1.5 py-0.5 rounded ${ui.bgColor} ${ui.textColor}`}>
-                {path.color}
+      {/* Test results */}
+      {testResult && (
+        <div className="space-y-4">
+          {/* Rendered output */}
+          <div className="border rounded-lg overflow-hidden">
+            <div className="px-4 py-2.5 bg-muted/20 border-b flex items-center justify-between">
+              <span className="text-sm font-semibold">
+                Test Output — <code>{testResult.def.id}</code>
+                <span className="text-muted-foreground font-normal ml-2">({testResult.resolved.length} primitives)</span>
               </span>
+            </div>
+            {testResult.resolved.length > 0 ? (
+              <div className="p-4 bg-background">
+                <PrimitiveRenderer primitives={testResult.resolved} />
+              </div>
+            ) : (
+              <div className="p-4 text-sm text-muted-foreground">No primitives rendered. Check your <code>ui</code> bindings and <code>when</code>/<code>forEach</code> conditions.</div>
             )}
           </div>
-          <div className="text-xs text-muted-foreground mt-0.5">{path.description}</div>
+
+          {/* Raw data */}
+          <details className="border rounded-lg overflow-hidden">
+            <summary className="px-4 py-2.5 cursor-pointer hover:bg-muted/30 text-sm font-medium">Raw output data</summary>
+            <pre className="text-sm font-mono bg-muted/10 px-4 py-3 overflow-x-auto max-h-60 overflow-y-auto border-t">
+              {JSON.stringify(testResult.data, null, 2)}
+            </pre>
+          </details>
+
+          {/* Add to library */}
+          {!registered ? (
+            <div className="flex items-center gap-3 px-4 py-3 rounded-lg border border-dashed border-primary/30 bg-primary/5">
+              <span className="text-sm">Looks good?</span>
+              <button
+                onClick={handleRegister}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
+              >
+                <Plus className="h-4 w-4" />
+                Add to Library
+              </button>
+            </div>
+          ) : (
+            <div className="px-4 py-3 rounded-lg bg-emerald-50 border border-emerald-200 text-sm text-emerald-700">
+              <strong>Added to library!</strong> <code>{testResult.def.id}</code> is now available in the catalog and can be referenced by protocols.
+            </div>
+          )}
         </div>
-        <span className="text-[10px] font-mono text-muted-foreground">{path.resolution.type}</span>
-      </button>
+      )}
 
-      {open && (
-        <div className="border-t px-4 py-3 bg-muted/10 space-y-3">
-          <div>
-            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Roles</div>
-            <div className="space-y-1">
-              {path.roles.map(role => (
-                <div key={role.id} className="flex items-center gap-2 text-xs">
-                  <span className="font-mono font-medium">{role.id}</span>
-                  <span className="text-muted-foreground">— {role.description}</span>
-                  <span className="text-[10px] font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{role.assignment}</span>
-                </div>
-              ))}
+      {/* Sample data info */}
+      <details className="border rounded-lg overflow-hidden">
+        <summary className="px-4 py-2.5 cursor-pointer hover:bg-muted/30 text-sm font-medium text-muted-foreground">View sample document (used for test runs)</summary>
+        <pre className="text-sm font-mono bg-muted/10 px-4 py-3 overflow-x-auto max-h-80 overflow-y-auto border-t">
+          {JSON.stringify(MOCK_SNAPSHOT, null, 2)}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// SENSE REGISTER PANEL
+// ═══════════════════════════════════════════════════════
+
+const SENSE_TEMPLATE_CODE = `registerSenseProtocol({
+  id: 'word-count-monitor',
+  name: 'Word Count Monitor',
+  description: 'Monitors word count per section.',
+  icon: 'Hash',
+  functions: ['my-custom-check'],  // reference a registered function
+  triggerOptions: [
+    { value: 'manual', label: 'Manual only' },
+    { value: 'interval', label: 'Every 5 minutes', config: { intervalMinutes: 5 } },
+  ],
+  defaultTrigger: 'manual',
+});`;
+
+function SenseRegisterPanel({ onRegistered }: { onRegistered: () => void }) {
+  const [code, setCode] = useState(SENSE_TEMPLATE_CODE);
+  const [error, setError] = useState<string | null>(null);
+  const [testRunning, setTestRunning] = useState(false);
+  const [testResult, setTestResult] = useState<{ def: SenseProtocolDefinition; functionResults: Array<{ funcId: string; data: Record<string, unknown>; resolved: ResolvedPrimitive[] }> } | null>(null);
+  const [registered, setRegistered] = useState(false);
+
+  const handleTest = async () => {
+    setError(null); setTestResult(null); setTestRunning(true); setRegistered(false);
+    try {
+      let capturedDef: SenseProtocolDefinition | null = null;
+      const fakeRegister = (def: SenseProtocolDefinition) => { capturedDef = def; };
+      const stripped = code.replace(/import.*from.*;\n?/g, '');
+      new Function('registerSenseProtocol', stripped)(fakeRegister);
+
+      if (!capturedDef) throw new Error('No registerSenseProtocol() call found in the code.');
+      const def: SenseProtocolDefinition = capturedDef;
+
+      // Run each referenced function against MOCK_SNAPSHOT
+      const functionResults: Array<{ funcId: string; data: Record<string, unknown>; resolved: ResolvedPrimitive[] }> = [];
+      for (const funcId of def.functions) {
+        const func = getFunction(funcId);
+        if (!func) {
+          functionResults.push({ funcId, data: { error: `Function "${funcId}" not found. Register it first in the Functions tab.` }, resolved: [] });
+          continue;
+        }
+        try {
+          const result = await runFunction(funcId, { snapshot: MOCK_SNAPSHOT, config: func.defaultConfig });
+          const resolved = resolveBindings(result.ui, result.data);
+          functionResults.push({ funcId, data: result.data, resolved });
+        } catch (e: unknown) {
+          functionResults.push({ funcId, data: { error: e instanceof Error ? e.message : String(e) }, resolved: [] });
+        }
+      }
+      setTestResult({ def, functionResults });
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTestRunning(false);
+    }
+  };
+
+  const handleRegister = async () => {
+    if (!testResult?.def) return;
+    try {
+      registerSenseProtocol(testResult.def);
+      await fetch('/api/dev/save-function', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: testResult.def.id, code, type: 'sense' }),
+      });
+      setRegistered(true);
+      onRegistered();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <p className="text-muted-foreground">
+        Write a <code>registerSenseProtocol()</code> call. <strong>Test it first</strong> — the panel will run each
+        referenced function against sample data and show the resulting primitives. Then add it to the library.
+      </p>
+
+      <div className="border rounded-lg overflow-hidden">
+        <div className="bg-muted/30 px-4 py-2.5 border-b flex justify-between items-center">
+          <span className="font-mono text-sm text-muted-foreground">registerSenseProtocol()</span>
+          <button
+            onClick={handleTest}
+            disabled={testRunning}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md border bg-background hover:bg-muted/50 disabled:opacity-40"
+          >
+            <Play className="h-4 w-4" />
+            {testRunning ? 'Running...' : 'Test Run'}
+          </button>
+        </div>
+        <textarea
+          value={code}
+          onChange={e => { setCode(e.target.value); setTestResult(null); setRegistered(false); setError(null); }}
+          className="w-full font-mono text-sm p-4 bg-background border-none resize-none focus:outline-none"
+          rows={16}
+          spellCheck={false}
+        />
+      </div>
+
+      {error && (
+        <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+
+      {testResult && (
+        <div className="space-y-4">
+          <div className="border rounded-lg overflow-hidden">
+            <div className="px-4 py-2.5 bg-muted/20 border-b">
+              <span className="text-sm font-semibold">
+                Test Output — <code>{testResult.def.id}</code>
+                <span className="text-muted-foreground font-normal ml-2">
+                  ({testResult.def.functions.length} function{testResult.def.functions.length !== 1 ? 's' : ''} referenced)
+                </span>
+              </span>
             </div>
-          </div>
-
-          <div>
-            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Actions</div>
-            <div className="space-y-1">
-              {path.actions.map(action => (
-                <div key={action.id} className="flex items-center gap-2 text-xs">
-                  <span className="font-mono font-medium">{action.id}</span>
-                  <span className="text-muted-foreground">{action.label}</span>
-                  <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-                    action.effect === 'approve' ? 'bg-emerald-50 text-emerald-600' :
-                    action.effect === 'reject' ? 'bg-red-50 text-red-600' :
-                    'bg-muted text-muted-foreground'
-                  }`}>{action.effect}</span>
-                  <span className="text-[10px] text-muted-foreground">→ [{action.availableTo.join(', ')}]</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Resolution</div>
-            <div className="text-xs font-mono">
-              {path.resolution.type}
-              {path.resolution.thresholdOptions && (
-                <span className="text-muted-foreground"> [{path.resolution.thresholdOptions.join(' | ')}]</span>
-              )}
-            </div>
-          </div>
-
-          {path.configFields.length > 0 && (
-            <div>
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Config Fields</div>
-              <div className="space-y-1">
-                {path.configFields.map((f, i) => (
-                  <div key={i} className="flex items-center gap-2 text-[11px] font-mono">
-                    <span className="text-muted-foreground">{f.type}</span>
-                    <span>{'key' in f ? f.key : ''}</span>
-                    {'options' in f && f.options && (
-                      <span className="text-muted-foreground">
-                        [{(f.options as { value: string }[]).map(o => o.value).join(' | ')}]
-                      </span>
-                    )}
+            <div className="divide-y">
+              {testResult.functionResults.map(fr => (
+                <div key={fr.funcId} className="p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <code className="text-sm font-bold bg-blue-50 text-blue-600 px-2 py-0.5 rounded">{fr.funcId}</code>
+                    <span className="text-sm text-muted-foreground">{fr.resolved.length} primitives</span>
                   </div>
-                ))}
+                  {'error' in fr.data && typeof fr.data.error === 'string' ? (
+                    <div className="text-sm text-red-600">{fr.data.error}</div>
+                  ) : fr.resolved.length > 0 ? (
+                    <PrimitiveRenderer primitives={fr.resolved} />
+                  ) : (
+                    <div className="text-sm text-muted-foreground">No primitives rendered.</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <details className="border rounded-lg overflow-hidden">
+            <summary className="px-4 py-2.5 cursor-pointer hover:bg-muted/30 text-sm font-medium">Protocol definition</summary>
+            <pre className="text-sm font-mono bg-muted/10 px-4 py-3 overflow-x-auto max-h-60 overflow-y-auto border-t">
+              {JSON.stringify(testResult.def, null, 2)}
+            </pre>
+          </details>
+
+          {!registered ? (
+            <div className="flex items-center gap-3 px-4 py-3 rounded-lg border border-dashed border-primary/30 bg-primary/5">
+              <span className="text-sm">Looks good?</span>
+              <button
+                onClick={handleRegister}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
+              >
+                <Plus className="h-4 w-4" />
+                Add to Library
+              </button>
+            </div>
+          ) : (
+            <div className="px-4 py-3 rounded-lg bg-emerald-50 border border-emerald-200 text-sm text-emerald-700">
+              <strong>Added to library!</strong> <code>{testResult.def.id}</code> is now available and can be enabled by users.
+            </div>
+          )}
+        </div>
+      )}
+
+      <details className="border rounded-lg overflow-hidden">
+        <summary className="px-4 py-2.5 cursor-pointer hover:bg-muted/30 text-sm font-medium text-muted-foreground">View sample document (used for test runs)</summary>
+        <pre className="text-sm font-mono bg-muted/10 px-4 py-3 overflow-x-auto max-h-80 overflow-y-auto border-t">
+          {JSON.stringify(MOCK_SNAPSHOT, null, 2)}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// COORDINATION REGISTER PANEL
+// ═══════════════════════════════════════════════════════
+
+const COORDINATION_TEMPLATE_CODE = `registerCoordinationPath({
+  id: 'quick-review',
+  name: 'Quick Review',
+  description: 'One person reviews and decides.',
+  icon: 'UserCheck',
+  color: 'emerald',
+  roles: [
+    { id: 'proposer', label: 'Proposer', description: 'Proposes the change', assignment: 'proposer' },
+    { id: 'reviewer', label: 'Reviewer', description: 'Reviews and decides', assignment: 'impacted-owners' },
+  ],
+  actions: [
+    { id: 'approve', label: 'Approve', icon: 'Check', availableTo: ['reviewer'], effect: 'approve' },
+    { id: 'reject', label: 'Reject', icon: 'X', availableTo: ['reviewer'], effect: 'reject' },
+  ],
+  resolution: { type: 'single-approval' },
+  propose: { steps: [
+    { type: 'show-data', dataKey: 'draftItems', ui: [{ type: 'result-list', forEach: 'draftItems', params: { title: '{{item.content}}', badge: '{{item.status}}' } }] },
+    { type: 'ui', ui: [{ type: 'text-input', params: { label: 'Why?', placeholder: 'Explain...', action: 'set-reasoning' } }] },
+    { type: 'ui', ui: [{ type: 'action-group', params: { actions: JSON.stringify([{ label: 'Submit', action: 'submit', variant: 'primary' }]) } }] },
+  ]},
+  deliberate: { steps: [
+    { type: 'show-result', functionId: 'assess-impact' },
+  ]},
+  resolve: { steps: [
+    { type: 'ui', ui: [{ type: 'banner', params: { title: 'Decided', message: 'Reviewer responded.', severity: 'success' } }] },
+  ]},
+  configFields: [],
+  defaultConfig: {},
+  proposerSummary: 'A reviewer will decide.',
+  receiverSummary: 'You are asked to review.',
+});`;
+
+function NegotiateRegisterPanel({ onRegistered }: { onRegistered: () => void }) {
+  const [code, setCode] = useState(COORDINATION_TEMPLATE_CODE);
+  const [error, setError] = useState<string | null>(null);
+  const [testRunning, setTestRunning] = useState(false);
+  const [testResult, setTestResult] = useState<{ def: CoordinationPathDefinition } | null>(null);
+  const [registered, setRegistered] = useState(false);
+
+  const handleTest = async () => {
+    setError(null); setTestResult(null); setTestRunning(true); setRegistered(false);
+    try {
+      let capturedDef: CoordinationPathDefinition | null = null;
+      const fakeRegister = (def: CoordinationPathDefinition) => { capturedDef = def; };
+      const stripped = code.replace(/import.*from.*;\n?/g, '');
+      new Function('registerCoordinationPath', 'JSON', stripped)(fakeRegister, JSON);
+
+      if (!capturedDef) throw new Error('No registerCoordinationPath() call found in the code.');
+      const def: CoordinationPathDefinition = capturedDef;
+      setTestResult({ def });
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTestRunning(false);
+    }
+  };
+
+  const handleRegister = async () => {
+    if (!testResult?.def) return;
+    try {
+      registerCoordinationPath(testResult.def);
+      await fetch('/api/dev/save-function', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: testResult.def.id, code, type: 'coordination' }),
+      });
+      setRegistered(true);
+      onRegistered();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <p className="text-muted-foreground">
+        Write a <code>registerCoordinationPath()</code> call. <strong>Test it first</strong> — the panel will
+        parse the definition and show the step visualization. Then add it to the library.
+      </p>
+
+      <div className="border rounded-lg overflow-hidden">
+        <div className="bg-muted/30 px-4 py-2.5 border-b flex justify-between items-center">
+          <span className="font-mono text-sm text-muted-foreground">registerCoordinationPath()</span>
+          <button
+            onClick={handleTest}
+            disabled={testRunning}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md border bg-background hover:bg-muted/50 disabled:opacity-40"
+          >
+            <Play className="h-4 w-4" />
+            {testRunning ? 'Running...' : 'Test Run'}
+          </button>
+        </div>
+        <textarea
+          value={code}
+          onChange={e => { setCode(e.target.value); setTestResult(null); setRegistered(false); setError(null); }}
+          className="w-full font-mono text-sm p-4 bg-background border-none resize-none focus:outline-none"
+          rows={28}
+          spellCheck={false}
+        />
+      </div>
+
+      {error && (
+        <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+
+      {testResult && (
+        <div className="space-y-4">
+          <div className="border rounded-lg overflow-hidden">
+            <div className="px-4 py-2.5 bg-muted/20 border-b">
+              <span className="text-sm font-semibold">
+                Test Output — <code>{testResult.def.id}</code>
+                <span className="text-muted-foreground font-normal ml-2">{testResult.def.name}</span>
+              </span>
+            </div>
+            <div className="p-4 space-y-4">
+              {(['propose', 'deliberate', 'resolve'] as const).map(stage => (
+                <div key={stage}>
+                  <Label>{stage.charAt(0).toUpperCase() + stage.slice(1)} (who: {testResult.def[stage]?.who}, {testResult.def[stage]?.steps?.length ?? 0} steps)</Label>
+                  <StepList steps={testResult.def[stage]?.steps ?? []} />
+                  {testResult.def[stage]?.actions && testResult.def[stage]!.actions!.length > 0 && (
+                    <div className="mt-1 ml-4 space-y-0.5">
+                      {testResult.def[stage]!.actions!.map((a: import("@/platform/protocol-types").ProtocolAction) => (
+                        <div key={a.id ?? a.label} className="flex items-center gap-2 text-sm">
+                          <code className="font-medium">{a.id ?? '-'}</code>
+                          <span className="text-muted-foreground">{a.label}</span>
+                          {a.who && <span className="text-xs text-muted-foreground">[{a.who.join(', ')}]</span>}
+                          {a.steps?.length ? <span className="text-xs bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded">{a.steps.length} sub-steps</span> : null}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+              <div>
+                <Label>Resolve</Label>
+                <code className="text-sm bg-muted px-2 py-0.5 rounded">who: {testResult.def.resolve?.who}</code>
               </div>
+            </div>
+          </div>
+
+          <details className="border rounded-lg overflow-hidden">
+            <summary className="px-4 py-2.5 cursor-pointer hover:bg-muted/30 text-sm font-medium">Full definition JSON</summary>
+            <pre className="text-sm font-mono bg-muted/10 px-4 py-3 overflow-x-auto max-h-60 overflow-y-auto border-t">
+              {JSON.stringify(testResult.def, null, 2)}
+            </pre>
+          </details>
+
+          {!registered ? (
+            <div className="flex items-center gap-3 px-4 py-3 rounded-lg border border-dashed border-primary/30 bg-primary/5">
+              <span className="text-sm">Looks good?</span>
+              <button
+                onClick={handleRegister}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
+              >
+                <Plus className="h-4 w-4" />
+                Add to Library
+              </button>
+            </div>
+          ) : (
+            <div className="px-4 py-3 rounded-lg bg-emerald-50 border border-emerald-200 text-sm text-emerald-700">
+              <strong>Added to library!</strong> <code>{testResult.def.id}</code> is now available for sense gates to reference.
             </div>
           )}
         </div>
@@ -2090,133 +1497,80 @@ function PathCard({ path }: { path: CoordinationPathDefinition }) {
   );
 }
 
-// ─── Shared UI Components ───
+// ═══════════════════════════════════════════════════════
+// SHARED COMPONENTS
+// ═══════════════════════════════════════════════════════
 
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function MajorTabBtn({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: React.ReactNode; children: React.ReactNode }) {
   return (
-    <button
-      onClick={onClick}
-      className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-        active ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
-      }`}
-    >
-      {children}
-    </button>
+    <button onClick={onClick} className={`flex items-center gap-2 px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
+      active ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
+    }`}>{icon}{children}</button>
   );
 }
 
-function CountBadge({ count }: { count: number }) {
+function Badge({ children }: { children: React.ReactNode }) {
+  return <span className="ml-1 text-xs font-mono bg-muted text-muted-foreground px-1.5 py-0.5 rounded-full">{children}</span>;
+}
+
+function SectionBlock({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
+  return <section id={id} className="scroll-mt-[60px]"><h2 className="text-xl font-bold mb-3">{title}</h2><div className="text-[15px] leading-relaxed">{children}</div></section>;
+}
+
+function Label({ children }: { children: React.ReactNode }) {
+  return <div className="text-sm font-bold text-muted-foreground uppercase tracking-wide mb-1.5">{children}</div>;
+}
+
+function DataCard({ title, subtitle, items }: { title: string; subtitle: string; items: Array<{ name: string; desc: string }> }) {
   return (
-    <span className="ml-1.5 text-[10px] font-mono bg-muted text-muted-foreground px-1.5 py-0.5 rounded-full">
-      {count}
-    </span>
+    <div className="border rounded-lg overflow-hidden">
+      <div className="px-4 py-2.5 bg-muted/30 border-b"><div className="font-semibold">{title}</div><div className="text-sm text-muted-foreground">{subtitle}</div></div>
+      <div className="divide-y">{items.map(item => <div key={item.name} className="px-4 py-2.5"><div className="font-mono font-medium">{item.name}</div><div className="text-sm text-muted-foreground">{item.desc}</div></div>)}</div>
+    </div>
   );
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h2 className="text-base font-semibold mb-3">{children}</h2>;
+function PrimitiveDoc({ prim }: { prim: PrimitiveDefinition }) {
+  const [open, setOpen] = useState(false);
+  const preview = PREVIEW_PRIMITIVES[prim.type];
+  return (
+    <div className="border rounded-lg overflow-hidden">
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-muted/30 transition-colors">
+        {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+        <code className="font-bold">{prim.type}</code>
+        <span className="text-muted-foreground">{prim.name}</span>
+        {prim.supportsIteration && <span className="text-xs bg-muted px-1.5 py-0.5 rounded">forEach</span>}
+      </button>
+      {open && (
+        <div className="border-t px-4 py-3 bg-muted/10 space-y-3">
+          <p className="text-muted-foreground text-sm">{prim.description}</p>
+          <div><Label>Parameters</Label><div className="space-y-1">{prim.params.map(p => <div key={p.key} className="flex items-start gap-2 text-sm"><code className="font-medium w-28 flex-shrink-0">{p.key}</code><code className={`px-1.5 py-0.5 rounded text-xs ${p.required ? 'bg-primary/10 text-primary' : 'bg-muted'}`}>{p.type}{!p.required && '?'}</code><span className="text-muted-foreground">{p.description}</span></div>)}</div></div>
+          {preview && <div><Label>Preview</Label><div className="border rounded-lg p-3 bg-background"><PrimitiveRenderer primitives={[preview]} /></div></div>}
+        </div>
+      )}
+    </div>
+  );
 }
 
-function Code({ children }: { children: React.ReactNode }) {
+function FieldTable({ fields }: { fields: [string, string, string, string][] }) {
   return (
-    <code className="font-mono text-[12px] bg-muted px-1.5 py-0.5 rounded border">
-      {children}
-    </code>
+    <div className="border rounded-lg overflow-hidden">
+      <table className="w-full"><thead><tr className="bg-muted/30 border-b text-sm"><th className="text-left px-4 py-2 font-bold">Field</th><th className="text-left px-4 py-2 font-bold">Type</th><th className="text-left px-4 py-2 font-bold w-20"></th><th className="text-left px-4 py-2 font-bold">Description</th></tr></thead>
+      <tbody className="divide-y">{fields.map(([n, t, r, d]) => <tr key={n}><td className="px-4 py-2.5 font-mono font-medium align-top">{n}</td><td className="px-4 py-2.5 font-mono text-muted-foreground align-top text-sm">{t}</td><td className="px-4 py-2.5 text-muted-foreground align-top text-sm">{r}</td><td className="px-4 py-2.5 text-muted-foreground">{d}</td></tr>)}</tbody></table>
+    </div>
   );
 }
 
 function CodeBlock({ children }: { children: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(children);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-
   return (
-    <div className="relative group">
-      <pre className="text-[12px] font-mono bg-zinc-950 text-zinc-100 rounded-lg px-4 py-3 overflow-x-auto leading-relaxed">
-        {children}
-      </pre>
-      <button
-        onClick={handleCopy}
-        className="absolute top-2 right-2 p-1.5 rounded-md bg-zinc-800 text-zinc-400 hover:text-zinc-200 opacity-0 group-hover:opacity-100 transition-opacity"
-      >
-        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
-    </div>
-  );
-}
-
-function PrimitivePreview({ name, location, description, binding, preview }: {
-  name: string;
-  location: string;
-  description: string;
-  binding: string;
-  preview: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const colorClass =
-    name === 'inline-highlight' ? 'text-yellow-600' :
-    name === 'inline-badge' ? 'text-blue-600' :
-    name === 'banner' ? 'text-amber-600' :
-    name === 'side-panel' ? 'text-indigo-600' :
-    name === 'gutter-marker' ? 'text-emerald-600' :
-    name === 'status-dot' ? 'text-orange-500' :
-    'text-muted-foreground';
-
-  return (
-    <div className="border rounded-lg overflow-hidden">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-muted/30 transition-colors"
-      >
-        {open ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className={`font-mono text-sm font-medium ${colorClass}`}>{name}</span>
-            <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{location}</span>
-          </div>
-          <div className="text-xs text-muted-foreground mt-0.5">{description}</div>
-        </div>
-      </button>
-
-      {open && (
-        <div className="border-t">
-          <div className="grid grid-cols-2 divide-x">
-            {/* Binding code */}
-            <div className="p-4">
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">Binding</div>
-              <CodeBlock>{binding}</CodeBlock>
-            </div>
-            {/* Visual preview */}
-            <div className="p-4 bg-muted/10">
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">Preview</div>
-              <div className="mt-2">{preview}</div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TypeBlock({ title, fields }: { title: string; fields: [string, string, string][] }) {
-  return (
-    <div className="border rounded-lg overflow-hidden">
-      <div className="px-4 py-2 bg-muted/30 border-b">
-        <span className="font-mono text-sm font-medium">{title}</span>
-      </div>
-      <div className="divide-y">
-        {fields.map(([name, type, desc]) => (
-          <div key={name} className="flex items-baseline gap-3 px-4 py-2 text-xs">
-            <span className="font-mono font-medium w-36 flex-shrink-0">{name}</span>
-            <span className="font-mono text-muted-foreground flex-shrink-0">{type}</span>
-            <span className="text-muted-foreground ml-auto text-right">{desc}</span>
-          </div>
-        ))}
-      </div>
+    <div className="rounded-lg border overflow-hidden mt-2 mb-2">
+      <Highlight theme={themes.vsLight} code={children.trim()} language="typescript">
+        {({ style, tokens, getLineProps, getTokenProps }) => (
+          <pre style={{ ...style, margin: 0, padding: '14px', fontSize: '14px', lineHeight: 1.6, overflow: 'auto' }}>
+            {tokens.map((line, i) => (<div key={i} {...getLineProps({ line })}>{line.map((token, key) => (<span key={key} {...getTokenProps({ token })} />))}</div>))}
+          </pre>
+        )}
+      </Highlight>
     </div>
   );
 }

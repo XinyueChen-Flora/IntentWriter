@@ -19,7 +19,7 @@
 // PRIMITIVE DEFINITION
 // ═══════════════════════════════════════════════════════
 
-export type PrimitiveLocation = 'writing-editor' | 'outline-node' | 'right-panel' | 'global';
+export type PrimitiveLocation = 'writing-editor' | 'outline-node' | 'right-panel' | 'draft-panel' | 'global';
 
 export type PrimitiveParamType =
   | 'string'           // general text
@@ -43,6 +43,12 @@ export type PrimitiveParam = {
   description: string;
 };
 
+/** Capability grouping metadata for entity-based resolution */
+export type CapabilityGroup = {
+  entity: string;      // 'IntentItem' | 'Paragraph' | 'Dependency' | 'Panel'
+  capability: string;  // 'Indicator' | 'Inline' | 'Card' | etc.
+};
+
 export type PrimitiveDefinition = {
   /** Unique type string */
   type: string;
@@ -56,6 +62,8 @@ export type PrimitiveDefinition = {
   params: PrimitiveParam[];
   /** Whether this primitive iterates over an array field (supports forEach/filter) */
   supportsIteration: boolean;
+  /** Entity-capability grouping (for capability-based resolution) */
+  capabilityGroup?: CapabilityGroup;
 };
 
 
@@ -66,6 +74,8 @@ export type PrimitiveDefinition = {
 export type UIBinding = {
   /** Which primitive to render */
   type: string;
+  /** Override the primitive's default render location */
+  location?: PrimitiveLocation;
   /** For array primitives: dot-path into the result object to iterate */
   forEach?: string;
   /** Filter expression: only render items matching this condition */
@@ -97,6 +107,13 @@ export function getAllPrimitives(): PrimitiveDefinition[] {
 
 export function getPrimitivesByLocation(location: PrimitiveLocation): PrimitiveDefinition[] {
   return getAllPrimitives().filter(p => p.location === location);
+}
+
+/** Get primitives by entity-capability grouping */
+export function getPrimitivesByCapability(entity: string, capability: string): PrimitiveDefinition[] {
+  return getAllPrimitives().filter(
+    p => p.capabilityGroup?.entity === entity && p.capabilityGroup?.capability === capability,
+  );
 }
 
 /** Validate that a UI binding references a registered primitive and has required params */
@@ -133,6 +150,7 @@ registerPrimitive({
   location: 'writing-editor',
   description: 'Color a text range by anchor text matching. Finds startAnchor in the editor and applies a background color with optional tooltip.',
   supportsIteration: true,
+  capabilityGroup: { entity: 'Paragraph', capability: 'Inline' },
   params: [
     { key: 'startAnchor', type: 'anchor', required: true, description: 'Substring to match for the start of the highlight range' },
     { key: 'endAnchor', type: 'anchor', required: false, description: 'Substring to match for the end. When absent, highlights only the startAnchor match' },
@@ -147,6 +165,7 @@ registerPrimitive({
   location: 'writing-editor',
   description: 'Numbered dot at a sentence boundary. Click to expand a detail popover with optional actions.',
   supportsIteration: true,
+  capabilityGroup: { entity: 'Paragraph', capability: 'Side' },
   params: [
     { key: 'anchor', type: 'anchor', required: true, description: 'Text to match. Dot placed after the end of this substring' },
     { key: 'index', type: 'string', required: true, description: 'Display number shown inside the dot' },
@@ -162,6 +181,7 @@ registerPrimitive({
   location: 'writing-editor',
   description: 'Block-level widget inserted into the editor at an anchor position. For suggestions, missing content indicators, or info notices.',
   supportsIteration: true,
+  capabilityGroup: { entity: 'Paragraph', capability: 'Block' },
   params: [
     { key: 'anchor', type: 'anchor', required: true, description: 'Text preceding the insertion point. Use "__start__" for document head' },
     { key: 'content', type: 'string', required: true, description: 'Widget body text (proposed prose, missing description, or notice)' },
@@ -177,6 +197,7 @@ registerPrimitive({
   location: 'writing-editor',
   description: 'Marks a text range as AI-generated content with a subtle tint and provenance icon.',
   supportsIteration: true,
+  capabilityGroup: { entity: 'Paragraph', capability: 'Inline' },
   params: [
     { key: 'startAnchor', type: 'anchor', required: true, description: 'Start of the AI-generated range' },
     { key: 'endAnchor', type: 'anchor', required: false, description: 'End of the range. When absent, covers only startAnchor match' },
@@ -194,6 +215,7 @@ registerPrimitive({
   location: 'outline-node',
   description: 'Status icon on an intent node. Shows coverage state. One icon per node (highest severity wins).',
   supportsIteration: true,
+  capabilityGroup: { entity: 'IntentItem', capability: 'Indicator' },
   params: [
     { key: 'nodeId', type: 'node-id', required: true, description: 'ID of the outline intent node' },
     { key: 'status', type: 'node-status', required: true, description: 'covered (green), partial (yellow), missing (red), ai-covered (blue sparkle)' },
@@ -207,6 +229,7 @@ registerPrimitive({
   location: 'outline-node',
   description: 'Small pill label on an intent node. Multiple badges can stack.',
   supportsIteration: true,
+  capabilityGroup: { entity: 'IntentItem', capability: 'Indicator' },
   params: [
     { key: 'nodeId', type: 'node-id', required: true, description: 'ID of the outline intent node' },
     { key: 'label', type: 'string', required: true, description: 'Badge text (keep under 12 chars)' },
@@ -220,6 +243,7 @@ registerPrimitive({
   location: 'outline-node',
   description: 'Notification card below a section node. For section-level findings affecting the whole section.',
   supportsIteration: true,
+  capabilityGroup: { entity: 'IntentItem', capability: 'Expandable' },
   params: [
     { key: 'sectionId', type: 'node-id', required: true, description: 'ID of the root-level section node' },
     { key: 'title', type: 'string', required: true, description: 'Alert heading' },
@@ -252,6 +276,7 @@ registerPrimitive({
   location: 'right-panel',
   description: 'Expandable card list in the right panel. Each card has title, badge, detail, and optional actions.',
   supportsIteration: true,
+  capabilityGroup: { entity: 'Panel', capability: 'Card' },
   params: [
     { key: 'title', type: 'string', required: true, description: 'Card header text' },
     { key: 'badge', type: 'string', required: false, description: 'Status pill beside the title' },
@@ -265,12 +290,13 @@ registerPrimitive({
   type: 'diff-view',
   name: 'Diff View',
   location: 'right-panel',
-  description: 'Text comparison widget. Word-level inline diff or side-by-side two-column layout.',
+  description: 'Text comparison widget. Word-level inline diff or side-by-side layout.',
   supportsIteration: false,
+  capabilityGroup: { entity: 'Panel', capability: 'Card' },
   params: [
-    { key: 'before', type: 'string', required: true, description: 'Original text (current state)' },
-    { key: 'after', type: 'string', required: true, description: 'Proposed text (changed state)' },
-    { key: 'mode', type: 'diff-mode', required: true, description: 'word (inline tokens) or side-by-side (two columns)' },
+    { key: 'before', type: 'string', required: true, description: 'Original text' },
+    { key: 'after', type: 'string', required: true, description: 'Updated text' },
+    { key: 'mode', type: 'diff-mode', required: true, description: 'word (inline tokens) or side-by-side' },
   ],
 });
 
@@ -280,6 +306,7 @@ registerPrimitive({
   location: 'right-panel',
   description: 'Standalone button row at the panel footer. For top-level actions like "Accept all" or "Dismiss".',
   supportsIteration: false,
+  capabilityGroup: { entity: 'Panel', capability: 'Widget' },
   params: [
     { key: 'actions', type: 'actions-json', required: true, description: 'JSON array of {label, variant, action}. At least one item required' },
   ],
@@ -296,9 +323,102 @@ registerPrimitive({
   location: 'global',
   description: 'Top-of-app notification bar. For document-level status. Highest severity wins if multiple.',
   supportsIteration: false,
+  capabilityGroup: { entity: 'Panel', capability: 'Widget' },
   params: [
     { key: 'title', type: 'string', required: true, description: 'Banner heading' },
     { key: 'message', type: 'string', required: true, description: 'Banner body' },
     { key: 'severity', type: 'severity', required: true, description: 'info (blue), warning (yellow), error (red), success (green)' },
+  ],
+});
+
+
+// ═══════════════════════════════════════════════════════
+// INTERACTION PRIMITIVES (for coordination flows)
+// ═══════════════════════════════════════════════════════
+
+registerPrimitive({
+  type: 'text-input',
+  name: 'Text Input',
+  location: 'right-panel',
+  description: 'Text input field for reasoning, comments, or replies. Emits the input value via onAction.',
+  supportsIteration: false,
+  capabilityGroup: { entity: 'Panel', capability: 'Widget' },
+  params: [
+    { key: 'placeholder', type: 'string', required: false, description: 'Placeholder text' },
+    { key: 'label', type: 'string', required: false, description: 'Label above the input' },
+    { key: 'action', type: 'string', required: true, description: 'Action ID emitted on submit' },
+    { key: 'rows', type: 'string', required: false, description: 'Number of rows (default 3)' },
+  ],
+});
+
+registerPrimitive({
+  type: 'comment-thread',
+  name: 'Comment Thread',
+  location: 'right-panel',
+  description: 'Displays a threaded list of comments/votes/responses with author, action, and optional text.',
+  supportsIteration: true,
+  capabilityGroup: { entity: 'Panel', capability: 'Widget' },
+  params: [
+    { key: 'author', type: 'string', required: true, description: 'Author name or ID' },
+    { key: 'action', type: 'string', required: true, description: 'Action taken (approve, reject, comment)' },
+    { key: 'text', type: 'string', required: false, description: 'Comment text (if any)' },
+    { key: 'timestamp', type: 'string', required: false, description: 'When the action was taken' },
+  ],
+});
+
+registerPrimitive({
+  type: 'progress-bar',
+  name: 'Progress Bar',
+  location: 'right-panel',
+  description: 'Shows progress toward a threshold (e.g., vote count toward majority).',
+  supportsIteration: false,
+  capabilityGroup: { entity: 'Panel', capability: 'Widget' },
+  params: [
+    { key: 'current', type: 'string', required: true, description: 'Current count' },
+    { key: 'total', type: 'string', required: true, description: 'Total needed' },
+    { key: 'label', type: 'string', required: false, description: 'Description (e.g., "3/5 approved")' },
+    { key: 'variant', type: 'string', required: false, description: 'Color variant: default, success, warning' },
+  ],
+});
+
+registerPrimitive({
+  type: 'outline-draft',
+  name: 'Outline Draft',
+  location: 'right-panel',
+  description: 'Shows a proposed outline with changes highlighted. Unchanged items shown plain, changed/added/removed items visually distinct. Includes propose and dismiss actions.',
+  supportsIteration: false,
+  capabilityGroup: { entity: 'Panel', capability: 'Widget' },
+  params: [
+    { key: 'items', type: 'string', required: true, description: 'JSON array [{id, content, status: "unchanged"|"changed"|"added"|"removed", originalContent?, reason?}]' },
+    { key: 'proposeAction', type: 'string', required: false, description: 'Action ID for propose button' },
+    { key: 'dismissAction', type: 'string', required: false, description: 'Action ID for dismiss button' },
+  ],
+});
+
+registerPrimitive({
+  type: 'route-picker',
+  name: 'Route Picker',
+  location: 'right-panel',
+  description: 'Shows available negotiate routes as selectable cards. User picks one to proceed.',
+  supportsIteration: false,
+  capabilityGroup: { entity: 'Panel', capability: 'Widget' },
+  params: [
+    { key: 'routes', type: 'string', required: true, description: 'JSON array of {id, name, description}' },
+    { key: 'reason', type: 'string', required: false, description: 'Explanation text shown above routes' },
+    { key: 'action', type: 'string', required: true, description: 'Action ID prefix emitted with selected route (action:routeId)' },
+  ],
+});
+
+registerPrimitive({
+  type: 'draft-editor',
+  name: 'Draft Editor',
+  location: 'draft-panel',
+  description: 'Editable list of outline items. Users can add, remove, and modify entries. Emits updated items via onAction.',
+  supportsIteration: false,
+  capabilityGroup: { entity: 'Panel', capability: 'Widget' },
+  params: [
+    { key: 'items', type: 'string', required: true, description: 'JSON array of draft items [{id, content, originalContent, isNew, isRemoved}]' },
+    { key: 'action', type: 'string', required: true, description: 'Action ID emitted when items change' },
+    { key: 'addLabel', type: 'string', required: false, description: 'Label for add button (default: "Add item")' },
   ],
 });

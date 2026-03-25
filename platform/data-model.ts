@@ -26,7 +26,7 @@ export type Attribution = {
 
 // ─── Outline ───
 
-/** A single node in the outline tree */
+/** A single node in the outline tree (aliased as IntentItem in paper) */
 export type OutlineNode = {
   id: string;
   content: string;
@@ -38,6 +38,9 @@ export type OutlineNode = {
   createdBy: Attribution;
   modifiedBy?: Attribution;  // absent if never modified after creation
 };
+
+/** Paper alias: IntentItem = OutlineNode */
+export type IntentItem = OutlineNode;
 
 /** A relationship between two outline nodes */
 export type OutlineDependency = {
@@ -78,6 +81,10 @@ export type DocumentMember = {
 /** A section of writing content with per-paragraph attribution */
 export type WritingContent = {
   sectionId: string;
+  /** The intent this writing section corresponds to */
+  intentId?: string;
+  /** Who is assigned to write this section */
+  assignee?: { userId: string; userName: string };
   /** HTML content from TipTap editor */
   html: string;
   /** Plain text (for word count, search, etc.) */
@@ -95,6 +102,29 @@ export type ParagraphAttribution = {
   textPrefix: string;
   /** Who last edited this paragraph */
   lastEditBy: Attribution;
+};
+
+
+// ─── Interaction Layer ───
+
+/** A stored result from a function execution (persisted across checks) */
+export type StoredFunctionResult = {
+  functionId: string;
+  targetId: string;
+  output: Record<string, unknown>;
+  timestamp: number;
+};
+
+/** A proposal in the negotiation flow */
+export type Proposal = {
+  id: string;
+  pathId: string;
+  proposerId: string;
+  targetSectionId: string;
+  changes: Array<{ id: string; content: string; status: string }>;
+  status: 'pending' | 'approved' | 'rejected';
+  attachedResults?: StoredFunctionResult[];
+  createdAt: number;
 };
 
 
@@ -126,6 +156,12 @@ export type DocumentSnapshot = {
   // ── Team ──
   members: DocumentMember[];
   currentUserId: string;
+
+  // ── Interaction Layer (optional) ──
+  /** Cached function results from prior checks */
+  functionResults?: StoredFunctionResult[];
+  /** Active proposals */
+  proposals?: Proposal[];
 };
 
 /** Helper: extract sections (root nodes) from a snapshot */

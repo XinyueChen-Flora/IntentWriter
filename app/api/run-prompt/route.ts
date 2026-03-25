@@ -18,27 +18,34 @@ function formatNodes(snapshot: DocumentSnapshot): string {
       .sort((a, b) => a.position - b.position);
 
     const childrenStr = children.length > 0
-      ? children.map(c => `  - [${c.id}] ${c.content}`).join('\n')
+      ? children.map(c => `  - (id:${c.id}) ${c.content}`).join('\n')
       : '  (no children)';
 
     const assignee = snapshot.assignments.find(a => a.sectionId === section.id);
-    const assigneeStr = assignee ? ` (assigned: ${assignee.assigneeName})` : '';
+    const assigneeStr = assignee ? ` [assigned: ${assignee.assigneeName}]` : '';
 
-    return `[${section.id}] ${section.content}${assigneeStr}\n${childrenStr}`;
+    return `Section "${section.content}"${assigneeStr} (id:${section.id})\n${childrenStr}`;
   }).join('\n\n');
 }
 
 function formatWriting(snapshot: DocumentSnapshot): string {
+  // Find section name for each writing entry
   return snapshot.writing.map(w => {
-    return `Section [${w.sectionId}] (${w.wordCount} words):\n${w.text}`;
+    const section = snapshot.nodes.find(n => n.id === w.sectionId);
+    const sectionName = section?.content || w.sectionId;
+    return `--- ${sectionName} (${w.wordCount} words) ---\n${w.text}`;
   }).join('\n\n');
 }
 
 function formatDependencies(snapshot: DocumentSnapshot): string {
   if (snapshot.dependencies.length === 0) return '(none)';
   return snapshot.dependencies.map(d => {
+    const fromNode = snapshot.nodes.find(n => n.id === d.fromId);
+    const toNode = snapshot.nodes.find(n => n.id === d.toId);
+    const fromName = fromNode?.content || d.fromId;
+    const toName = toNode?.content || d.toId;
     const dir = d.direction === 'bidirectional' ? '↔' : '→';
-    return `[${d.fromId}] ${dir} [${d.toId}] (${d.type}: ${d.label})`;
+    return `"${fromName}" ${dir} "${toName}" (${d.type}: ${d.label})`;
   }).join('\n');
 }
 

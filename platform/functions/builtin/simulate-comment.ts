@@ -6,6 +6,10 @@ registerFunction({
   description: 'Translate a natural language comment into proposed outline changes.',
   icon: 'MessageSquare',
   trigger: 'on-demand',
+  target: { type: 'node', description: 'Interprets a comment about a specific intent' },
+  category: 'on-demand',
+  triggerOptions: [{ value: 'manual', label: 'User initiates' }],
+  defaultTrigger: 'manual',
 
   requires: {},
 

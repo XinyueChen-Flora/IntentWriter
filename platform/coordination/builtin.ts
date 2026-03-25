@@ -1,151 +1,224 @@
-// ─── Built-in Coordination Paths ───
+// ─── Built-in Negotiate Protocols ───
 //
-// Registers the 4 existing coordination paths into the platform.
-// To add a new path: define a CoordinationPathDefinition and call registerCoordinationPath().
-// See coordination-protocol.ts for the full type definition.
+// Three protocols spanning the range of team involvement:
+// 1. Inform — immediate, notification only
+// 2. Team Vote — structured voting with majority threshold
+// 3. Discussion — open conversation, proposer closes
+//
+// All steps reference registered functions. No hardcoded UI.
+// Actions use steps (which call functions), not effects.
 
-import { registerCoordinationPath, type CoordinationPathDefinition } from './protocol';
+import { registerCoordinationPath } from './protocol';
 
-export const NOTIFY_PATH: CoordinationPathDefinition = {
+// ═══════════════════════════════════════════════════════
+// 1. INFORM
+// ═══════════════════════════════════════════════════════
+
+registerCoordinationPath({
   id: 'decided',
   name: 'Inform',
-  description: 'Notify affected people, no approval needed.',
+  description: 'Notify affected people. Changes apply immediately.',
   icon: 'Bell',
   color: 'blue',
-  roles: [
-    { id: 'proposer', label: 'Proposer', description: 'The person who made the change', assignment: 'proposer' },
-    { id: 'receiver', label: 'Receiver', description: 'People affected by the change', assignment: 'impacted-owners' },
-  ],
-  actions: [
-    { id: 'acknowledge', label: 'Acknowledge', icon: 'Check', availableTo: ['receiver'], effect: 'acknowledge' },
-    { id: 'escalate', label: 'Escalate', icon: 'ArrowUp', availableTo: ['receiver'], effect: 'escalate' },
-  ],
-  resolution: { type: 'immediate' },
-  configFields: [
-    {
-      type: 'segment', key: 'notifyLevel', label: 'Notification level',
-      options: [
-        { value: 'skip', label: 'Silent' },
-        { value: 'heads-up', label: 'Heads-up' },
-        { value: 'notify', label: 'Notify' },
-      ],
-    },
-  ],
-  defaultConfig: { notifyLevel: 'heads-up' },
-  proposerSummary: 'Changes apply immediately. Affected people are notified.',
-  receiverSummary: 'You\'re being notified of a change.',
-};
 
-export const INPUT_PATH: CoordinationPathDefinition = {
-  id: 'input',
-  name: 'Ask for Input',
-  description: 'Get feedback from affected section owners. One approval resolves.',
-  icon: 'UserCheck',
-  color: 'emerald',
-  roles: [
-    { id: 'proposer', label: 'Proposer', description: 'The person proposing the change', assignment: 'proposer' },
-    { id: 'reviewer', label: 'Reviewer', description: 'Section owner who decides', assignment: 'impacted-owners' },
-  ],
-  actions: [
-    { id: 'approve', label: 'Accept', icon: 'Check', availableTo: ['reviewer'], effect: 'approve' },
-    { id: 'reject', label: 'Decline', icon: 'X', availableTo: ['reviewer'], effect: 'reject' },
-    { id: 'response', label: 'Suggest changes', icon: 'Edit2', availableTo: ['reviewer'], effect: 'comment' },
-  ],
-  resolution: { type: 'single-approval' },
-  configFields: [
-    {
-      type: 'segment', key: 'routeTo', label: 'Ask who',
-      options: [
-        { value: 'impacted-owners', label: 'Affected owners' },
-        { value: 'all-members', label: 'Everyone' },
-      ],
-    },
-  ],
-  defaultConfig: { routeTo: 'impacted-owners', receiverActions: 'approve-suggest' },
-  proposerSummary: 'Affected owners will review and decide.',
-  receiverSummary: 'You\'re being asked to decide on a proposed change.',
-};
+  functions: ['render-changes-summary', 'frame-proposal', 'apply-proposal'],
 
-export const VOTE_PATH: CoordinationPathDefinition = {
+  propose: {
+    who: 'proposer',
+    steps: [
+      // Step 1: Show what you changed
+      { run: 'render-changes-summary' },
+      // Step 2: Show who is affected
+      { run: 'frame-proposal' },
+      // Step 3: Reasoning input (text-input primitive rendered by useStepExecutor)
+    ],
+    actions: [
+      { id: 'submit', label: 'Apply & Notify', gate: true },
+      { id: 'cancel', label: 'Cancel', stop: true },
+    ],
+  },
+
+  deliberate: {
+    who: '{{config.notifyWho}}',
+    steps: [
+      { run: 'render-changes-summary' },
+      { run: 'frame-proposal' },
+    ],
+    actions: [
+      { id: 'acknowledge', label: 'Acknowledge',
+        steps: [{ run: 'submit-vote', params: { vote: 'acknowledge' } }] },
+    ],
+  },
+
+  resolve: {
+    who: 'system',
+    steps: [
+      { run: 'apply-proposal' },
+    ],
+    actions: [
+      { id: 'done', label: 'Done', stop: true },
+    ],
+  },
+
+  config: {
+    notifyWho: {
+      default: 'impacted-owners',
+      options: ['impacted-owners', 'all-members'],
+      label: 'Who to notify',
+    },
+  },
+});
+
+
+// ═══════════════════════════════════════════════════════
+// 2. TEAM VOTE
+// ═══════════════════════════════════════════════════════
+
+registerCoordinationPath({
   id: 'negotiate',
   name: 'Team Vote',
-  description: 'The team votes. Threshold determines outcome.',
+  description: 'The team votes on the proposed change.',
   icon: 'Vote',
   color: 'indigo',
-  roles: [
-    { id: 'proposer', label: 'Proposer', description: 'The person proposing the change', assignment: 'proposer' },
-    { id: 'voter', label: 'Voter', description: 'Team members who vote', assignment: 'impacted-owners' },
-  ],
-  actions: [
-    { id: 'approve', label: 'Approve', icon: 'Check', availableTo: ['voter'], effect: 'approve' },
-    { id: 'reject', label: 'Reject', icon: 'X', availableTo: ['voter'], effect: 'reject' },
-  ],
-  resolution: { type: 'threshold', thresholdOptions: ['any', 'majority', 'all'] },
-  configFields: [
-    {
-      type: 'segment', key: 'voteThreshold', label: 'Approval threshold',
-      options: [
-        { value: 'any', label: 'Any one' },
-        { value: 'majority', label: 'Majority' },
-        { value: 'all', label: 'Unanimous' },
-      ],
-    },
-    {
-      type: 'segment', key: 'voters', label: 'Who votes',
+
+  functions: ['render-draft', 'frame-proposal', 'render-changes-summary', 'preview-writing-impact',
+              'render-vote-progress', 'render-vote-thread', 'assess-impact',
+              'check-majority', 'preview-resolution-effect', 'apply-proposal', 'revert-proposal'],
+
+  propose: {
+    who: 'proposer',
+    steps: [
+      { run: 'render-draft' },
+      { run: 'frame-proposal' },
+    ],
+  },
+
+  deliberate: {
+    who: '{{config.voters}}',
+    steps: [
+      { show: 'frame-proposal' },
+      { run: 'render-changes-summary' },
+      { run: 'preview-writing-impact' },
+      { run: 'render-vote-progress' },
+      { run: 'render-vote-thread' },
+    ],
+    actions: [
+      { id: 'approve', label: 'Approve' },
+      { id: 'reject', label: 'Reject' },
+      { id: 'counter-propose', label: 'Counter-propose',
+        steps: [
+          { run: 'render-draft' },
+          { run: 'assess-impact' },
+          { run: 'preview-writing-impact' },
+        ] },
+    ],
+  },
+
+  resolve: {
+    who: 'system',
+    steps: [
+      { run: '{{config.resolutionFn}}' },
+      { run: 'preview-resolution-effect' },
+    ],
+    actions: [
+      { id: 'apply', label: 'Apply Changes',
+        steps: [{ run: 'apply-proposal' }] },
+      { id: 'revert', label: 'Revert',
+        steps: [{ run: 'revert-proposal' }] },
+    ],
+  },
+
+  config: {
+    voters: {
+      default: 'impacted-owners',
       options: [
         { value: 'impacted-owners', label: 'Affected owners' },
         { value: 'all-members', label: 'Everyone' },
       ],
+      label: 'Who votes',
     },
-  ],
-  defaultConfig: { voteThreshold: 'majority', voters: 'impacted-owners' },
-  proposerSummary: 'Team members will vote on this change.',
-  receiverSummary: 'You\'re being asked to vote on a proposed change.',
-};
+    resolutionFn: {
+      default: 'check-majority',
+      options: [
+        { value: 'check-majority', label: 'Majority' },
+        { value: 'check-unanimous', label: 'Unanimous' },
+        { value: 'check-single-approval', label: 'Any one approves' },
+      ],
+      label: 'Resolution rule',
+    },
+    deadline: {
+      default: '48h',
+      type: 'duration',
+      label: 'Voting deadline',
+    },
+  },
+});
 
-export const DISCUSSION_PATH: CoordinationPathDefinition = {
+
+// ═══════════════════════════════════════════════════════
+// 3. DISCUSSION
+// ═══════════════════════════════════════════════════════
+
+registerCoordinationPath({
   id: 'discussion',
   name: 'Discussion',
   description: 'Open conversation. Proposer wraps up when ready.',
   icon: 'MessagesSquare',
   color: 'amber',
-  roles: [
-    { id: 'proposer', label: 'Proposer', description: 'The person who started the discussion', assignment: 'proposer' },
-    { id: 'participant', label: 'Participant', description: 'Team members in the discussion', assignment: 'impacted-owners' },
-  ],
-  actions: [
-    { id: 'response', label: 'Reply', icon: 'Send', availableTo: ['participant', 'proposer'], effect: 'comment' },
-    { id: 'approve', label: 'Apply Changes', icon: 'Check', availableTo: ['proposer'], effect: 'approve' },
-    { id: 'reject', label: 'Drop It', icon: 'X', availableTo: ['proposer'], effect: 'reject' },
-  ],
-  resolution: { type: 'proposer-closes' },
-  configFields: [
-    {
-      type: 'segment', key: 'participants', label: 'Who participates',
+
+  functions: ['render-draft', 'frame-proposal', 'render-changes-summary',
+              'render-vote-thread', 'assess-impact', 'preview-writing-impact',
+              'apply-proposal', 'revert-proposal'],
+
+  propose: {
+    who: 'proposer',
+    steps: [
+      { run: 'render-draft' },
+      { run: 'frame-proposal' },
+    ],
+  },
+
+  deliberate: {
+    who: '{{config.participants}}',
+    steps: [
+      { show: 'frame-proposal' },
+      { run: 'render-changes-summary' },
+      { run: 'render-vote-thread' },
+    ],
+    actions: [
+      { id: 'reply', label: 'Reply' },
+      { id: 'suggest-alt', label: 'Suggest alternative',
+        steps: [
+          { run: 'render-draft' },
+          { run: 'assess-impact' },
+          { run: 'preview-writing-impact' },
+        ] },
+    ],
+  },
+
+  resolve: {
+    who: 'proposer',
+    steps: [
+      { run: 'preview-resolution-effect' },
+    ],
+    actions: [
+      { id: 'close-approve', label: 'Apply Changes',
+        who: ['proposer'],
+        steps: [{ run: 'apply-proposal' }] },
+      { id: 'close-reject', label: 'Drop It',
+        who: ['proposer'],
+        steps: [{ run: 'revert-proposal' }] },
+    ],
+  },
+
+  config: {
+    participants: {
+      default: 'impacted-owners',
       options: [
         { value: 'impacted-owners', label: 'Affected owners' },
         { value: 'all-members', label: 'Everyone' },
       ],
+      label: 'Who participates',
     },
-    {
-      type: 'segment', key: 'closedBy', label: 'Who can close',
-      options: [
-        { value: 'proposer', label: 'Proposer' },
-        { value: 'anyone', label: 'Anyone' },
-        { value: 'consensus', label: 'Consensus' },
-      ],
-    },
-  ],
-  defaultConfig: { participants: 'impacted-owners', closedBy: 'proposer' },
-  proposerSummary: 'Open a discussion. You\'ll wrap up when ready.',
-  receiverSummary: 'You\'re invited to discuss a proposed change.',
-};
-
-export function registerBuiltinPaths(): void {
-  registerCoordinationPath(NOTIFY_PATH);
-  registerCoordinationPath(INPUT_PATH);
-  registerCoordinationPath(VOTE_PATH);
-  registerCoordinationPath(DISCUSSION_PATH);
-}
-
-registerBuiltinPaths();
+  },
+});

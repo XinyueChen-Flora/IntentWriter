@@ -6,6 +6,27 @@ registerFunction({
   description: 'Compare writing against the outline to find drifts, missing content, and dependency issues.',
   icon: 'Eye',
   trigger: 'detection',
+  target: { type: 'section', description: 'Checks alignment between writing and intents for a section' },
+  category: 'writing',
+  triggerOptions: [
+    { value: 'paragraph-end', label: 'After each paragraph' },
+    { value: 'manual', label: 'Manual check button' },
+    { value: 'pause', label: 'After writing pause', config: { debounce: 10000 } },
+    { value: 'interval', label: 'Periodic check', config: { interval: 300000 } },
+  ],
+  defaultTrigger: 'paragraph-end',
+  options: [
+    {
+      key: 'trigger', label: 'When to check', type: 'select',
+      choices: [
+        { value: 'paragraph-end', label: 'After each paragraph' },
+        { value: 'manual', label: 'Manual only' },
+        { value: 'pause', label: 'After pause (10s)' },
+        { value: 'interval', label: 'Every 5 minutes' },
+      ],
+      default: 'paragraph-end',
+    },
+  ],
 
   requires: { writing: true, dependencies: false },
 
@@ -48,7 +69,7 @@ Each entry:
   "coverageStatus": "covered" | "partial" | "missing",
   "sentences": [{ "start": "...", "end": "..." }],
   "suggestedWriting": "for partial/missing only",
-  "coverageNote": "for partial: what's missing (under 15 words)",
+  "coverageNote": "SPECIFIC description of the gap. For partial: what EXACTLY is not yet covered (e.g., 'Missing discussion of X' or 'Needs examples of Y'). For missing: what content is needed (e.g., 'Write about Z'). Be concrete, not vague.",
   "insertAfter": { "start": "...", "end": "..." }
 }
 
@@ -65,14 +86,19 @@ Each entry:
   "crossSectionImpacts": [],
   "summary": "Overall analysis summary"
 }`,
-    user: `## Outline
+    user: `## Full Document Outline
 {{nodes}}
 
-## Writing
+## Writing Content
 {{writing}}
 
 ## Dependencies
-{{dependencies}}`,
+{{dependencies}}
+
+## Focus Section
+{{focus}}
+
+IMPORTANT: Only analyze the section identified in Focus. Compare ONLY that section's intents against ONLY that section's writing. Do NOT include intents or analysis from other sections. The alignedIntents array should ONLY contain intents that belong to the focused section.`,
     temperature: 0.2,
   },
 
@@ -85,6 +111,7 @@ Each entry:
   },
 
   ui: [
+    // ═══ OUTLINE VIEW: coverage icons on each intent node ═══
     {
       type: 'node-icon',
       forEach: 'alignedIntents',
@@ -94,55 +121,114 @@ Each entry:
         tooltip: '{{item.coverageNote}}',
       },
     },
-    {
-      type: 'node-badge',
-      forEach: 'alignedIntents',
-      filter: 'item.coverageStatus !== "covered"',
-      params: {
-        nodeId: '{{item.id}}',
-        label: '{{item.coverageStatus}}',
-        variant: 'warning',
-      },
-    },
+
+    // ═══ WRITING VIEW: sentence highlights for partial coverage ═══
     {
       type: 'sentence-highlight',
       forEach: 'alignedIntents',
-      filter: 'item.coverageStatus === "partial" && item.sentences.length > 0',
+      filter: 'item.coverageStatus === "partial" && item.sentences && item.sentences.length > 0',
       params: {
         startAnchor: '{{item.sentences}}',
         color: 'yellow',
         tooltip: '{{item.coverageNote}}',
       },
     },
+    // ═══ WRITING VIEW: sentence highlights for covered ═══
+    {
+      type: 'sentence-highlight',
+      forEach: 'alignedIntents',
+      filter: 'item.coverageStatus === "covered" && item.sentences && item.sentences.length > 0',
+      params: {
+        startAnchor: '{{item.sentences}}',
+        color: 'green',
+        tooltip: '{{item.content}}',
+      },
+    },
+    // ═══ WRITING VIEW: issue dots for missing intents ═══
+    {
+      type: 'issue-dot',
+      forEach: 'alignedIntents',
+      filter: 'item.intentStatus === "existing" && item.coverageStatus === "missing"',
+      params: {
+        type: 'missing',
+        detail: '{{item.content}}',
+        anchor: '{{item.insertAfter}}',
+      },
+    },
+    // ═══ WRITING VIEW: issue dots for orphan content ═══
+    {
+      type: 'issue-dot',
+      forEach: 'alignedIntents',
+      filter: 'item.intentStatus === "new" && item.sentences && item.sentences.length > 0',
+      params: {
+        type: 'orphan',
+        detail: '{{item.content}}',
+        anchor: '{{item.sentences}}',
+      },
+    },
+
+    // ═══ PANEL: Summary ═══
     {
       type: 'banner',
-      when: 'level === "drifted"',
+      when: 'level !== "aligned"',
       params: {
-        title: 'Drift detected',
+        title: 'Drift Summary',
         message: '{{summary}}',
-        severity: 'warning',
+        severity: '{{level === "drifted" ? "warning" : "info"}}',
+      },
+    },
+
+    // ═══ PANEL: Partial/Missing intents — with Change Outline / Change Writing actions ═══
+    {
+      type: 'result-list',
+      forEach: 'alignedIntents',
+      filter: 'item.intentStatus === "existing" && item.coverageStatus === "partial"',
+      params: {
+        title: '{{item.content}}',
+        badge: 'partial',
+        badgeVariant: 'warning',
+        detail: '{{item.coverageNote}}',
+        actions: JSON.stringify([
+          { label: 'Change Writing', action: 'sense:drift-impact-preview:writing', variant: 'default' },
+          { label: 'Change Outline', action: 'sense:drift-impact-preview:intent', variant: 'default' },
+        ]),
       },
     },
     {
       type: 'result-list',
-      forEach: 'crossSectionImpacts',
+      forEach: 'alignedIntents',
+      filter: 'item.intentStatus === "existing" && item.coverageStatus === "missing"',
       params: {
-        title: '{{item.sectionIntent}}',
-        badge: '{{item.impactType}}',
+        title: '{{item.content}}',
+        badge: 'missing',
         badgeVariant: 'warning',
-        detail: '{{item.description}}',
+        detail: '{{item.coverageNote}}',
+        actions: JSON.stringify([
+          { label: 'Change Writing', action: 'sense:drift-impact-preview:writing', variant: 'default' },
+          { label: 'Change Outline', action: 'sense:drift-impact-preview:intent', variant: 'default' },
+        ]),
       },
     },
+
+    // ═══ PANEL: Orphan content (new intents) — with Add to Outline action ═══
+    {
+      type: 'result-list',
+      forEach: 'alignedIntents',
+      filter: 'item.intentStatus === "new"',
+      params: {
+        title: '{{item.content}}',
+        badge: 'orphan',
+        badgeVariant: 'new',
+        detail: 'Writing content not in the outline',
+        actions: JSON.stringify([
+          { label: 'Add to Outline', action: 'add-to-outline', variant: 'primary' },
+          { label: 'Dismiss', action: 'dismiss', variant: 'default' },
+        ]),
+      },
+    },
+
   ],
 
-  configFields: [
-    {
-      type: 'select', key: 'trigger', label: 'Trigger', layout: 'grid-2',
-      options: [
-        { value: 'manual', label: 'Writer decides', icon: 'User' },
-        { value: 'auto', label: 'Automatic', icon: 'Sparkles' },
-      ],
-    },
-  ],
+  configFields: [],
   defaultConfig: { trigger: 'manual', displayMode: 'inline' },
 });

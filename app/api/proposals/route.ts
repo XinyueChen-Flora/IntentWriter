@@ -118,5 +118,52 @@ export const POST = withErrorHandler(async (request: Request) => {
     return NextResponse.json({ error: "Failed to create proposal" }, { status: 500 });
   }
 
-  return NextResponse.json({ proposal });
+  // Run defaultFunctions.propose for this path (async, non-blocking)
+  // Results are stored in the interaction store and attached to the proposal
+  const resolvedPathType = baseRow.propose_type;
+  let attachedResults: Array<{ functionId: string; data: unknown }> = [];
+  try {
+    // Dynamic import to avoid circular deps in the API route
+    const { getCoordinationPath } = await import('@/platform/coordination/protocol');
+    await import('@/platform/coordination/builtin');
+    const pathDef = getCoordinationPath(resolvedPathType);
+    const proposeFunctions = (pathDef?.propose.steps ?? [])
+      .filter((s) => !!s.run)
+      .map(s => s.run!);
+
+    if (proposeFunctions.length > 0) {
+      const { runFunction } = await import('@/platform/functions/runner');
+      await import('@/platform/functions/builtin');
+
+      for (const fnId of proposeFunctions) {
+        try {
+          const result = await runFunction(fnId, {
+            snapshot: {
+              documentId,
+              phase: 'writing' as const,
+              nodes: [],
+              assignments: [],
+              dependencies: [],
+              writing: [],
+              members: [],
+              currentUserId: user.id,
+            },
+            focus: {
+              sectionId,
+              proposedChanges: sourceChanges ?? [],
+            },
+            config: {},
+          });
+          attachedResults.push({ functionId: fnId, data: result.data });
+        } catch (e) {
+          console.warn(`[proposals] Failed to run defaultFunction ${fnId}:`, e);
+        }
+      }
+    }
+  } catch (e) {
+    // Non-critical: don't fail the proposal if functions fail
+    console.warn('[proposals] Failed to run defaultFunctions:', e);
+  }
+
+  return NextResponse.json({ proposal, attachedResults });
 });

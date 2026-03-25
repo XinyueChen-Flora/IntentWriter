@@ -40,6 +40,10 @@ export default function TipTapEditor({
   onRegisterMarkdownExporter,
   onRegisterParagraphAttributionExporter,
   onParagraphEnd,
+  // Pipeline-driven primitives
+  editorPrimitives,
+  hoveredIntentId,
+  // Legacy props (kept for backward compat)
   onCheckAlignment,
   isCheckingAlignment,
   sentenceHighlights,
@@ -371,22 +375,12 @@ export default function TipTapEditor({
       }
     };
 
+    // Use pipeline-driven primitives if available, otherwise empty
+    const editorPrims = (pureWritingMode ? [] : editorPrimitives) || [];
+
     const newPlugin = createHighlightPlugin({
-      sentenceHighlights: mergedSentenceHighlights,
-      alignedIntents: pureWritingMode ? undefined : alignedIntents,
-      highlightFilter: pureWritingMode ? null : highlightFilter,
-      hoveredIntentForLink: pureWritingMode ? null : hoveredIntentForLink,
-      hoveredOrphanHint: pureWritingMode ? null : hoveredOrphanHint,
-      localHoveredIntent: pureWritingMode ? null : localHoveredIntent,
-      pendingWritingSuggestion: pendingWritingSuggestion || null,
-      onAcceptWritingSuggestion: handleAcceptWritingSuggestion,
-      onCancelWritingSuggestion: handleCancelWritingSuggestion,
-      onHoverSimulatedIntent: onHoverIntentFromWriting,
-      onSimulateMissing: handleSimulateMissing,
-      expandedMissingIntentId,
-      loadingIntentId,
-      currentIntentId: intent.id,
-      aiCoveredIntents,
+      editorPrimitives: editorPrims,
+      hoveredIntentId: hoveredIntentForLink || hoveredIntentId,
     });
 
     const existingPlugin = highlightPluginKey.get(editor.view.state);
@@ -397,9 +391,7 @@ export default function TipTapEditor({
         plugins: [...plugins, newPlugin],
       })
     );
-  }, [editor, mergedSentenceHighlights, alignedIntents, highlightFilter, hoveredIntentForLink, hoveredOrphanHint,
-      localHoveredIntent, pendingWritingSuggestion, handleAcceptWritingSuggestion, handleCancelWritingSuggestion,
-      onHoverIntentFromWriting, onAddMissingContent, expandedMissingIntentId, loadingIntentId, intent.id, aiCoveredIntents, pureWritingMode]);
+  }, [editor, editorPrimitives, hoveredIntentForLink, hoveredIntentId, pureWritingMode]);
 
   // Precompute highlight ranges when sentenceHighlights changes
   useEffect(() => {
@@ -737,35 +729,7 @@ export default function TipTapEditor({
   return (
     <div className="flex flex-col h-full">
       <div className="relative min-h-[200px] flex-1">
-        {/* Check alignment button */}
-        {onCheckAlignment && (
-          <div className="absolute top-2 right-2 z-10">
-            <button
-              onClick={onCheckAlignment}
-              disabled={isCheckingAlignment}
-              className={`
-                flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium transition-colors
-                ${isCheckingAlignment
-                  ? "bg-blue-100 text-blue-600 cursor-wait"
-                  : "bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground"
-                }
-              `}
-              title="Check alignment with outline"
-            >
-              {isCheckingAlignment ? (
-                <>
-                  <span className="h-3 w-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                  <span>Checking...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-3 w-3" />
-                  <span>Check</span>
-                </>
-              )}
-            </button>
-          </div>
-        )}
+        {/* Check button removed — now comes from sense protocol UI via PrimitiveRenderer */}
 
         {/* TipTap Editor */}
         <div data-writing-block={writingBlock.id}>

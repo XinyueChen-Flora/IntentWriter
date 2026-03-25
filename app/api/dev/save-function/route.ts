@@ -4,36 +4,44 @@ import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
 
-const CUSTOM_DIR = path.join(process.cwd(), "platform/functions/custom");
+// Three directories for three protocol types
+const DIRS = {
+  function: path.join(process.cwd(), "platform/functions/custom"),
+  sense: path.join(process.cwd(), "platform/sense/custom"),
+  negotiate: path.join(process.cwd(), "platform/coordination/custom"),
+} as const;
+
+type ProtocolType = keyof typeof DIRS;
+
+function getDir(type: string): string {
+  return DIRS[type as ProtocolType] ?? DIRS.function;
+}
 
 /**
- * GET /api/dev/save-function
- *
- * Lists all custom function files and returns their code.
- * Used on page load to dynamically register saved functions.
+ * GET /api/dev/save-function?type=function|awareness|coordination
+ * Lists all saved custom registrations of the given type.
  */
-export async function GET() {
+export async function GET(request: Request) {
   if (process.env.NODE_ENV === "production") {
-    return NextResponse.json(
-      { error: "This endpoint is only available in development" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Dev only" }, { status: 403 });
   }
 
-  try {
-    await fs.mkdir(CUSTOM_DIR, { recursive: true });
-    const files = await fs.readdir(CUSTOM_DIR);
-    const customFiles = files.filter(
-      (f) => f.endsWith(".ts") && f !== "index.ts"
-    );
+  const url = new URL(request.url);
+  const type = url.searchParams.get("type") || "function";
+  const dir = getDir(type);
 
-    const functions: Array<{ id: string; code: string }> = [];
-    for (const file of customFiles) {
-      const code = await fs.readFile(path.join(CUSTOM_DIR, file), "utf-8");
-      functions.push({ id: file.replace(".ts", ""), code });
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    const files = await fs.readdir(dir);
+    const tsFiles = files.filter(f => f.endsWith(".ts") && f !== "index.ts");
+
+    const items: Array<{ id: string; code: string }> = [];
+    for (const file of tsFiles) {
+      const code = await fs.readFile(path.join(dir, file), "utf-8");
+      items.push({ id: file.replace(".ts", ""), code });
     }
 
-    return NextResponse.json({ functions });
+    return NextResponse.json({ functions: items });
   } catch {
     return NextResponse.json({ functions: [] });
   }
@@ -41,68 +49,56 @@ export async function GET() {
 
 /**
  * POST /api/dev/save-function
- *
- * Saves a function definition as a TypeScript file.
- * Body: { id: string, code: string }
+ * Body: { id: string, code: string, type?: "function" | "awareness" | "coordination" }
  */
 export async function POST(request: Request) {
   if (process.env.NODE_ENV === "production") {
-    return NextResponse.json(
-      { error: "This endpoint is only available in development" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Dev only" }, { status: 403 });
   }
 
   const body = await request.json();
-  const { id, code } = body as { id: string; code: string };
+  const { id, code, type = "function" } = body as { id: string; code: string; type?: string };
 
   if (!id || !code) {
     return NextResponse.json({ error: "Missing id or code" }, { status: 400 });
   }
 
+  const dir = getDir(type);
   const safeId = id.replace(/[^a-zA-Z0-9_-]/g, "-");
-  const filePath = path.join(CUSTOM_DIR, `${safeId}.ts`);
+  const filePath = path.join(dir, `${safeId}.ts`);
 
   try {
-    await fs.mkdir(CUSTOM_DIR, { recursive: true });
+    await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(filePath, code, "utf-8");
-
-    return NextResponse.json({
-      path: `platform/functions/custom/${safeId}.ts`,
-    });
+    return NextResponse.json({ path: filePath.replace(process.cwd(), "") });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 }
 
 /**
- * DELETE /api/dev/save-function?id=xxx
- *
- * Removes a custom function file.
+ * DELETE /api/dev/save-function?id=xxx&type=function|awareness|coordination
  */
 export async function DELETE(request: Request) {
   if (process.env.NODE_ENV === "production") {
-    return NextResponse.json(
-      { error: "This endpoint is only available in development" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Dev only" }, { status: 403 });
   }
 
   const url = new URL(request.url);
   const id = url.searchParams.get("id");
+  const type = url.searchParams.get("type") || "function";
 
   if (!id) {
     return NextResponse.json({ error: "Missing id" }, { status: 400 });
   }
 
+  const dir = getDir(type);
   const safeId = id.replace(/[^a-zA-Z0-9_-]/g, "-");
-  const filePath = path.join(CUSTOM_DIR, `${safeId}.ts`);
 
   try {
-    await fs.unlink(filePath);
+    await fs.unlink(path.join(dir, `${safeId}.ts`));
     return NextResponse.json({ deleted: safeId });
   } catch {
-    return NextResponse.json({ error: "File not found" }, { status: 404 });
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 }

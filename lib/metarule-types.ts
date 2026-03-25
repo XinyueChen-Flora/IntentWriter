@@ -1,217 +1,110 @@
-// ─── MetaRule Type Definitions ───
-// Defines the team-configurable governance pipeline for collaborative writing.
-// The pipeline: Detection → Propose → Impact Preview → Gate → Coordination → Response → Resolution → Apply
+import type { GateRule } from "@/platform/gate/protocol";
 
-// ─── Shared Types (reused from existing system) ───
+export type NotifyLevel = "skip" | "heads-up" | "notify";
 
-export type CoordinationPath = 'decided' | 'input' | 'discussion' | 'negotiate';
-export type VoteThreshold = 'any' | 'majority' | 'all';
-export type NotifyLevel = 'skip' | 'heads-up' | 'notify';
-export type ImpactLevel = 'none' | 'minor' | 'significant';
-
-// ─── Pipeline Stage Configs ───
-
-/** Step 1: Detection — what to monitor and how to display results */
-export type DetectionCheckConfig = {
-  type: 'drift' | 'dependency' | string; // extensible
-  trigger: 'auto' | 'manual';
-  autoFrequency?: 'per-paragraph' | 'per-minute';
-  autoIntervalMinutes?: number;
-  displayMode: 'severe-only' | 'inline' | 'summary';
+export type EnabledSenseProtocol = {
+  protocolId: string;
+  enabled: boolean;
+  trigger: string;
+  config: Record<string, unknown>;
 };
-
-export type DetectionConfig = {
-  checks: DetectionCheckConfig[];
-};
-
-/** Step 3 (after auto impact preview): Gate — bypass conditions based on impact results */
-export type GateConfig = {
-  /** No cross-section impact → bypass coordination, apply directly */
-  bypassWhenNoImpact: boolean;
-  /** All impacts are minor → bypass coordination */
-  bypassWhenAllMinor: boolean;
-  /** Section owner can always self-resolve changes to their own section */
-  ownerCanSelfResolve: boolean;
-};
-
-/** Step 4: Routing — map impact conditions to coordination paths */
-export type RoutingRule = {
-  condition: {
-    impactLevel?: ImpactLevel;
-    scope?: 'same-section' | 'cross-section';
-  };
-  path: CoordinationPath;
-};
-
-/** Step 4-6: Coordination path definitions
- *  Each path defines both proposer-side (how to frame) and receiver-side (what actions are available).
- */
-export type DecidedPathConfig = {
-  // Proposer side
-  defaultNotifyLevel: NotifyLevel;
-  // Receiver side
-  receiverCanEscalate?: boolean;
-  escalateTo?: 'discussion' | 'negotiate';
-};
-
-export type InputPathConfig = {
-  // Proposer side
-  routeTo: 'impacted-owners' | 'all-members';
-  // Receiver side
-  receiverActions?: 'approve-only' | 'approve-reject' | 'approve-suggest';
-  noResponsePolicy?: 'wait' | 'auto-approve' | 'escalate';
-  deadlineHours?: number;
-};
-
-export type DiscussionPathConfig = {
-  // Proposer side
-  participants: 'impacted-owners' | 'all-members';
-  closedBy: 'proposer' | 'anyone' | 'consensus';
-  // Receiver side
-  receiverCanCounterPropose?: boolean;
-  receiverCanEscalate?: boolean;
-  noResponsePolicy?: 'wait' | 'auto-close' | 'auto-reject';
-  deadlineHours?: number;
-};
-
-export type NegotiatePathConfig = {
-  // Proposer side
-  voteThreshold: VoteThreshold;
-  voters: 'impacted-owners' | 'all-members';
-  // Receiver side
-  receiverCanCounterPropose?: boolean;
-  noResponsePolicy?: 'wait' | 'count-as-approve' | 'count-as-abstain';
-  deadlineHours?: number;
-};
-
-export type CoordinationConfig = {
-  decided: DecidedPathConfig;
-  input: InputPathConfig;
-  discussion: DiscussionPathConfig;
-  negotiate: NegotiatePathConfig;
-};
-
-/** Step 7: Apply — what happens after resolution */
-export type ApplyConfig = {
-  autoApplyOnApproval: boolean;
-  autoGenerateWritingPreview: boolean;
-};
-
-// ─── Complete MetaRule Configuration ───
 
 export type MetaRuleConfig = {
-  version: 1;
-
-  /** Step 1: Detection settings */
-  detection: DetectionConfig;
-
-  /** Step 3: Gate bypass conditions (evaluated after impact preview) */
-  gate: GateConfig;
-
-  /** Step 4: Routing rules — condition → coordination path */
-  routing: RoutingRule[];
-
-  /** Step 4-6: Per-path coordination settings */
-  coordination: CoordinationConfig;
-
-  /** Step 7: Apply settings */
-  apply: ApplyConfig;
-
-  /** Allow writers to override MetaRule defaults at proposal time */
+  version: 2;
+  senseProtocols: Record<string, EnabledSenseProtocol>;
+  gateId?: string;
+  gateRules?: GateRule[];
+  defaultNegotiateProtocol: string;
+  defaultNotifyLevel: NotifyLevel;
   allowOverride: boolean;
-
-  /** Metadata */
-  updatedAt?: number;
-  updatedBy?: string;
 };
 
-// ─── Default Configuration ───
-// Matches current system behavior: manual choices, no auto-bypass, no auto-apply
+export type PipelineConfig = MetaRuleConfig;
 
 export const DEFAULT_METARULE_CONFIG: MetaRuleConfig = {
-  version: 1,
-
-  detection: {
-    checks: [
-      {
-        type: 'drift',
-        trigger: 'manual',
-        displayMode: 'inline',
-      },
-    ],
-  },
-
-  gate: {
-    bypassWhenNoImpact: true,
-    bypassWhenAllMinor: false,
-    ownerCanSelfResolve: true,
-  },
-
-  routing: [
-    { condition: { impactLevel: 'none' }, path: 'decided' },
-    { condition: { impactLevel: 'minor' }, path: 'decided' },
-    { condition: { impactLevel: 'significant' }, path: 'negotiate' },
-  ],
-
-  coordination: {
-    decided: {
-      defaultNotifyLevel: 'heads-up',
-    },
-    input: {
-      routeTo: 'impacted-owners',
-    },
-    discussion: {
-      participants: 'impacted-owners',
-      closedBy: 'proposer',
-    },
-    negotiate: {
-      voteThreshold: 'majority',
-      voters: 'impacted-owners',
+  version: 2,
+  senseProtocols: {
+    "drift-impact-preview": {
+      protocolId: "drift-impact-preview",
+      enabled: true,
+      trigger: "manual",
+      config: {},
     },
   },
-
-  apply: {
-    autoApplyOnApproval: false,
-    autoGenerateWritingPreview: true,
-  },
-
+  gateId: undefined,
+  gateRules: undefined,
+  defaultNegotiateProtocol: "decided",
+  defaultNotifyLevel: "heads-up",
   allowOverride: true,
 };
 
-// ─── Helper: resolve routing ───
+export const EMPTY_PIPELINE_CONFIG: PipelineConfig = DEFAULT_METARULE_CONFIG;
 
-export function resolveCoordinationPath(
-  config: MetaRuleConfig,
-  maxImpactLevel: ImpactLevel,
-  scope: 'same-section' | 'cross-section'
-): CoordinationPath {
-  // Find first matching routing rule
-  for (const rule of config.routing) {
-    const levelMatch =
-      !rule.condition.impactLevel || rule.condition.impactLevel === maxImpactLevel;
-    const scopeMatch = !rule.condition.scope || rule.condition.scope === scope;
-    if (levelMatch && scopeMatch) {
-      return rule.path;
-    }
-  }
-  // Fallback
-  return 'decided';
+// ─── Legacy Gate Threshold Helpers (used by metaRule-engine) ───
+
+export type CoordinationPath = "decided" | "input" | "discussion" | "negotiate";
+export type ImpactScope = "same-section" | "cross-section";
+export type ImpactSeverity = "none" | "minor" | "significant";
+export type GroupInterest = "low" | "medium" | "high";
+
+export type GateThreshold = {
+  id: string;
+  name: string;
+  minScope?: ImpactScope;
+  minSeverity?: ImpactSeverity;
+  minGroupInterest?: GroupInterest;
+  suggestedPath: CoordinationPath;
+  pathConfig?: Record<string, unknown>;
+};
+
+const SCOPE_ORDER: ImpactScope[] = ["same-section", "cross-section"];
+const SEVERITY_ORDER: ImpactSeverity[] = ["none", "minor", "significant"];
+const INTEREST_ORDER: GroupInterest[] = ["low", "medium", "high"];
+
+function meetsOrExceeds<T>(value: T, threshold: T, order: T[]): boolean {
+  return order.indexOf(value) >= order.indexOf(threshold);
 }
 
-export function shouldBypassGate(
-  config: MetaRuleConfig,
-  maxImpactLevel: ImpactLevel,
-  hasCrossSectionImpact: boolean,
-  isOwner: boolean
-): boolean {
-  if (config.gate.bypassWhenNoImpact && !hasCrossSectionImpact) {
-    return true;
+export type GateSuggestion = {
+  thresholdId: string;
+  thresholdName: string;
+  suggestedPath: CoordinationPath;
+  pathConfig?: Record<string, unknown>;
+  reason: string;
+};
+
+export function evaluateGateThresholds(
+  thresholds: GateThreshold[],
+  scope: ImpactScope,
+  severity: ImpactSeverity,
+  groupInterest: GroupInterest
+): GateSuggestion | null {
+  for (const threshold of thresholds) {
+    const scopeMatch =
+      !threshold.minScope || meetsOrExceeds(scope, threshold.minScope, SCOPE_ORDER);
+    const severityMatch =
+      !threshold.minSeverity ||
+      meetsOrExceeds(severity, threshold.minSeverity, SEVERITY_ORDER);
+    const interestMatch =
+      !threshold.minGroupInterest ||
+      meetsOrExceeds(groupInterest, threshold.minGroupInterest, INTEREST_ORDER);
+
+    if (scopeMatch && severityMatch && interestMatch) {
+      const reasons: string[] = [];
+      if (threshold.minScope) reasons.push(`scope: ${scope}`);
+      if (threshold.minSeverity) reasons.push(`severity: ${severity}`);
+      if (threshold.minGroupInterest)
+        reasons.push(`group interest: ${groupInterest}`);
+
+      return {
+        thresholdId: threshold.id,
+        thresholdName: threshold.name,
+        suggestedPath: threshold.suggestedPath,
+        pathConfig: threshold.pathConfig,
+        reason: `Gate "${threshold.name}" crossed (${reasons.join(", ")})`,
+      };
+    }
   }
-  if (config.gate.bypassWhenAllMinor && maxImpactLevel !== 'significant') {
-    return true;
-  }
-  if (config.gate.ownerCanSelfResolve && isOwner && !hasCrossSectionImpact) {
-    return true;
-  }
-  return false;
+
+  return null;
 }

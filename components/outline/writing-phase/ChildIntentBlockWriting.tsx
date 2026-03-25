@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import type { IntentBlock } from "@/lib/partykit";
-import { ChevronDown, ChevronRight, Pencil, MessageSquare, MoreHorizontal } from "lucide-react";
+import { ChevronDown, ChevronRight, Pencil, MoreHorizontal } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -11,10 +11,8 @@ import {
 } from '@dnd-kit/sortable';
 import { SortableBlockItem } from "../ui/SortableBlockItem";
 import { useIntentPanelContext } from "../IntentPanelContext";
-import { CoverageIcon, AiBadge } from "../ui/CoverageIcons";
-import { ChangeStatusBadge } from "../ui/ChangeStatusBadge";
+import { PrimitiveRenderer } from "@/components/capability/PrimitiveRenderer";
 import { WordDiff } from "@/components/simulate/WordDiff";
-import UserAvatar from "@/components/user/UserAvatar";
 
 type ChildIntentBlockWritingProps = {
   block: IntentBlock;
@@ -47,7 +45,6 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
   const isCollapsed = ctx.collapsedBlocks.has(block.id);
   const isHoveredFromWriting = ctx.hoveredIntentFromWriting === block.id;
   const isHoveredFromSummary = ctx.hoveredIntentForLink === block.id;
-  const isAiCovered = ctx.aiCoveredIntents?.has(block.id) || false;
 
   const getRootId = (b: IntentBlock): string => {
     if (!b.parentId) return b.id;
@@ -56,12 +53,26 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
   };
   const rootId = getRootId(block);
 
-  const childCoverageStatus = (() => {
-    const parentDriftStatus = ctx.getDriftStatus?.(rootId);
-    if (!parentDriftStatus) return null;
-    return parentDriftStatus.intentCoverage.find(c => c.intentId === block.id) || null;
-  })();
+  // ─── Read primitives for THIS block from the pipeline ───
 
+  const outlinePrims = ctx.primitivesByLocation['outline-node'] || [];
+
+  // Primitives scoped to THIS block (by nodeId)
+  const blockPrimitives = useMemo(() => {
+    return outlinePrims.filter(p => p.params.nodeId === block.id);
+  }, [outlinePrims, block.id]);
+
+  // Action groups are global (no nodeId) — available on every node
+  const actionGroups = useMemo(() => {
+    return outlinePrims.filter(p => p.type === 'action-group' && !p.params.nodeId);
+  }, [outlinePrims]);
+
+  // Derive visual state from block-scoped primitives
+  const nodeIcon = blockPrimitives.find(p => p.type === 'node-icon');
+  const nodeBadges = blockPrimitives.filter(p => p.type === 'node-badge');
+  const coverageStatus = nodeIcon?.params.status as 'covered' | 'partial' | 'missing' | undefined;
+
+  // Dependency highlight
   const selectedDepColor = (() => {
     const activeDepId = ctx.selectedDepId || ctx.hoveredDepId;
     if (!activeDepId || !ctx.dependencies) return null;
@@ -73,34 +84,38 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
     return null;
   })();
 
-  // Highlight if this block is the trigger for an active proposal draft
-  const isProposalTrigger = ctx.proposalDraft?.triggerIntentId === block.id;
+  // ─── Visual state from block data + primitives ───
+  // Block data (changeStatus) drives content rendering.
+  // Primitives (node-icon, node-badge) drive status indicators.
+  // Both are protocol-produced — changeStatus is set by mutations from functions,
+  // primitives are produced by function UI bindings.
 
   const isProposed = block.changeStatus === 'proposed';
+  const isRemoved = block.changeStatus === 'removed' || (isProposed && block.proposedAction === 'remove');
+  const isModified = (block.changeStatus === 'proposed' || block.changeStatus === 'modified')
+    && block.previousContent && block.previousContent !== block.content;
+  const isAdded = isProposed && block.proposedAction === 'add';
 
   const borderClass = (() => {
-    if (isProposalTrigger) return "border-blue-500 dark:border-blue-400";
     if (isProposed) return "border-dashed border-indigo-400 dark:border-indigo-500";
-    if (block.changeStatus === 'removed') return "border-red-500 dark:border-red-600";
+    if (isRemoved) return "border-red-500 dark:border-red-600";
     if (isHoveredFromWriting || isHoveredFromSummary) {
-      if (childCoverageStatus?.status === 'partial') return "border-amber-600";
-      if (childCoverageStatus?.status === 'missing') return "border-red-600";
+      if (coverageStatus === 'partial') return "border-amber-600";
+      if (coverageStatus === 'missing') return "border-red-600";
       return "border-emerald-600";
     }
     if (ctx.selectedBlockId === block.id) return "border-primary";
-    if (childCoverageStatus) {
-      if (childCoverageStatus.status === 'partial') return "border-amber-600";
-      if (childCoverageStatus.status === 'missing') return "border-red-600";
-    }
+    if (coverageStatus === 'partial') return "border-amber-600";
+    if (coverageStatus === 'missing') return "border-red-600";
     return "border-border";
   })();
 
   const bgClass = (() => {
     if (isProposed) return "bg-indigo-50/30 dark:bg-indigo-950/20";
-    if (block.changeStatus === 'removed') return "bg-red-50/30 dark:bg-red-950/30";
+    if (isRemoved) return "bg-red-50/30 dark:bg-red-950/30";
     if (isHoveredFromWriting || isHoveredFromSummary) {
-      if (childCoverageStatus?.status === 'partial') return "bg-amber-50/50 dark:bg-amber-950/40";
-      if (childCoverageStatus?.status === 'missing') return "bg-red-50/50 dark:bg-red-950/40";
+      if (coverageStatus === 'partial') return "bg-amber-50/50 dark:bg-amber-950/40";
+      if (coverageStatus === 'missing') return "bg-red-50/50 dark:bg-red-950/40";
       return "bg-emerald-50/50 dark:bg-emerald-950/40";
     }
     if (ctx.selectedBlockId === block.id) return "bg-primary/5";
@@ -145,12 +160,17 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
         }`}
       >
         <div className="flex items-start gap-2">
-          {/* Coverage icon */}
-          {childCoverageStatus && !block.changeStatus && (
-            <div className="flex-shrink-0 mt-0.5">
-              <CoverageIcon status={childCoverageStatus.status} aiCovered={isAiCovered} className="h-3.5 w-3.5" />
-            </div>
-          )}
+          {/* Coverage icon — derived from node-icon primitive */}
+          {nodeIcon && !block.changeStatus && (() => {
+            const STATUS_ICONS: Record<string, string> = { covered: '\u2713', partial: '\u25D1', missing: '\u25CB', 'ai-covered': '\u2728' };
+            const STATUS_COLORS: Record<string, string> = { covered: 'text-emerald-500', partial: 'text-yellow-500', missing: 'text-red-400', 'ai-covered': 'text-blue-500' };
+            const s = nodeIcon.params.status || 'missing';
+            return (
+              <span className={`flex-shrink-0 mt-0.5 text-sm ${STATUS_COLORS[s] || 'text-muted-foreground'}`}>
+                {STATUS_ICONS[s] || '\u25CB'}
+              </span>
+            );
+          })()}
 
           {hasChildren && (
             <button
@@ -161,17 +181,16 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
             </button>
           )}
 
-          {/* Content — always locked */}
+          {/* Content — rendered based on block data (set by function mutations) */}
           <div className="flex-1 min-w-0">
             <div
               className={`prose prose-sm max-w-none rounded px-1 py-0.5 ${
-                block.changeStatus === 'removed' ? 'line-through text-red-500 dark:text-red-400 opacity-70' :
-                isProposed && block.proposedAction === 'remove' ? 'line-through text-indigo-400 dark:text-indigo-500 opacity-70' : ''
+                isRemoved ? 'line-through text-red-500 dark:text-red-400 opacity-70' : ''
               }`}
             >
-              {(block.changeStatus === 'proposed' || block.changeStatus === 'modified') && block.previousContent && block.previousContent !== block.content ? (
-                <WordDiff oldText={block.previousContent} newText={block.content} />
-              ) : isProposed && block.proposedAction === 'add' ? (
+              {isModified ? (
+                <WordDiff oldText={block.previousContent!} newText={block.content} />
+              ) : isAdded ? (
                 <span className="text-indigo-600 dark:text-indigo-400">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
                     {block.content || "*empty*"}
@@ -184,53 +203,35 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
               )}
             </div>
 
-            {/* Change trace — compact line below content */}
-            {block.changeStatus && block.changeBy && (
-              <div className="mt-0.5 px-1">
-                {block.proposalId ? (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (isProposed) {
-                        // Negotiate type: expand the thread on this section
-                        ctx.setExpandedThreadProposalId(
-                          ctx.expandedThreadProposalId === block.proposalId ? null : block.proposalId!
-                        );
-                      } else {
-                        // Decided type: open ProposalViewer panel
-                        ctx.setViewingProposalId(block.proposalId!);
-                        ctx.setViewingProposalForSectionId(rootId);
-                        ctx.setViewingProposalAffectedSectionId(rootId);
-                      }
-                    }}
-                    className="hover:opacity-80 transition-opacity"
-                  >
-                    <ChangeStatusBadge
-                      status={block.changeStatus}
-                      proposedAction={block.proposedAction}
-                      changeByAvatar={ctx.userAvatarMap.get(block.changeBy!)}
-                      changeBy={block.changeByName}
-                      changeAt={block.changeAt}
-                    />
-                  </button>
-                ) : (
-                  <ChangeStatusBadge
-                    status={block.changeStatus}
-                    changeByAvatar={ctx.userAvatarMap.get(block.changeBy!)}
-                    changeBy={block.changeByName}
-                    changeAt={block.changeAt}
-                  />
-                )}
+            {/* Node badges — derived from node-badge primitives */}
+            {nodeBadges.length > 0 && (
+              <div className="mt-0.5 px-1 flex items-center gap-1.5 flex-wrap">
+                {nodeBadges.map((badge, i) => {
+                  const BADGE_STYLES: Record<string, string> = {
+                    new: 'bg-emerald-100 text-emerald-700', modified: 'bg-blue-100 text-blue-700',
+                    removed: 'bg-red-100 text-red-700', warning: 'bg-amber-100 text-amber-700',
+                    info: 'bg-muted text-muted-foreground',
+                  };
+                  const style = BADGE_STYLES[badge.params.variant] || BADGE_STYLES.info;
+                  return (
+                    <span key={i} className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${style}`}>
+                      {badge.params.label}
+                    </span>
+                  );
+                })}
               </div>
+            )}
+
+            {/* Change trace — from block data (set by function mutations) */}
+            {block.changeStatus && block.changeBy && nodeBadges.length === 0 && (
+              <ChangeTrace block={block} />
             )}
           </div>
 
-          {/* Right side: indicators + action trigger */}
+          {/* Right side: action trigger */}
           <div className="flex items-center gap-1 flex-shrink-0 relative">
-            {isAiCovered && <AiBadge />}
-
             {/* Action button */}
-            {block.changeStatus !== 'removed' && (
+            {!isRemoved && (
               <button
                 onClick={() => setShowActions(prev => !prev)}
                 className={`p-1 rounded-md transition-all ${
@@ -244,38 +245,23 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
               </button>
             )}
 
-            {/* Action menu — 2 options */}
+            {/* Action menu — renders outline-node action-group primitives */}
             {showActions && (
               <div
                 ref={actionsRef}
-                className="absolute right-0 top-full mt-1 z-20 bg-popover border rounded-lg shadow-lg p-1 min-w-[220px]"
+                className="absolute right-0 top-full mt-1 z-20 bg-popover border rounded-lg shadow-lg p-1 min-w-[180px]"
               >
-                <button
-                  onClick={() => {
-                    setShowActions(false);
-                    ctx.openProposalDraft(rootId, 'change', block.id);
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-muted rounded-md transition-colors text-left"
-                >
-                  <Pencil className="h-4 w-4 text-blue-600 flex-shrink-0" />
-                  <div>
-                    <div className="font-medium">Propose a change</div>
-                    <div className="text-xs text-muted-foreground">Edit this section&apos;s outline</div>
-                  </div>
-                </button>
-                <button
-                  onClick={() => {
-                    setShowActions(false);
-                    ctx.openProposalDraft(rootId, 'comment', block.id);
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-muted rounded-md transition-colors text-left"
-                >
-                  <MessageSquare className="h-4 w-4 text-amber-500 flex-shrink-0" />
-                  <div>
-                    <div className="font-medium">Leave a comment</div>
-                    <div className="text-xs text-muted-foreground">Share a thought about this item</div>
-                  </div>
-                </button>
+                {actionGroups.length === 0 ? (
+                  <div className="px-3 py-2 text-sm text-muted-foreground">No actions available</div>
+                ) : (
+                  <PrimitiveRenderer
+                    primitives={actionGroups}
+                    onAction={(action) => {
+                      setShowActions(false);
+                      ctx.openProposalDraft(rootId, 'change', block.id);
+                    }}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -284,6 +270,44 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
 
       {/* Children */}
       {renderChildren()}
+    </div>
+  );
+}
+
+// ─── Change Trace (inline, expandable reasoning) ───
+
+function ChangeTrace({ block }: { block: IntentBlock }) {
+  const [expanded, setExpanded] = useState(false);
+  const hasReasoning = !!(block as any).changeReasoning;
+
+  const STATUS_STYLES: Record<string, string> = {
+    proposed: 'bg-indigo-100 text-indigo-700',
+    modified: 'bg-blue-100 text-blue-700',
+    added: 'bg-emerald-100 text-emerald-700',
+    removed: 'bg-red-100 text-red-700',
+  };
+
+  return (
+    <div className="mt-0.5 px-1">
+      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+        <span className={`px-1.5 py-0.5 rounded-full font-medium ${
+          STATUS_STYLES[block.changeStatus || ''] || 'bg-muted text-muted-foreground'
+        }`}>{block.changeStatus}</span>
+        <span>by {block.changeByName}</span>
+        {hasReasoning && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+            className="text-primary/70 hover:text-primary underline"
+          >
+            {expanded ? 'hide reason' : 'why?'}
+          </button>
+        )}
+      </div>
+      {expanded && hasReasoning && (
+        <div className="mt-1 px-1 py-1 text-xs text-muted-foreground bg-muted/30 rounded italic">
+          {(block as any).changeReasoning}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,10 +1,8 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import type { IntentBlock } from "@/lib/partykit";
-import { ChevronDown, ChevronRight, Trash2, ChevronLeft, Link2, Pencil, MessageSquare, MoreHorizontal, Check, Eye, Plus, Minus, Edit2 } from "lucide-react";
-import UserAvatar from "@/components/user/UserAvatar";
-import type { SectionNotification } from "../IntentPanelContext";
+import { ChevronDown, ChevronRight, Trash2, ChevronLeft, Link2, Pencil, MessageSquare, MoreHorizontal, Plus, Edit2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -16,7 +14,6 @@ import { SortableBlockItem } from "../ui/SortableBlockItem";
 import { AssignDropdown } from "../ui/AssignDropdown";
 import { useIntentPanelContext } from "../IntentPanelContext";
 import { CoverageIcon } from "../ui/CoverageIcons";
-import { IntentUpdatePreviewPanel } from "../ui/IntentUpdatePreview";
 import { ChildIntentBlock } from "../setup/ChildIntentBlock";
 import { ChildIntentBlockWriting } from "../writing-phase/ChildIntentBlockWriting";
 import { WritingSectionPanel } from "../writing-phase/WritingSectionPanel";
@@ -67,8 +64,17 @@ export function RootIntentBlock({ block, rootIndex }: RootIntentBlockProps) {
     return null;
   })();
 
-  // Drift detection status (for root coverage icon only)
-  const driftStatus = !ctx.isSetupPhase ? ctx.getDriftStatus?.(block.id) : undefined;
+  // Coverage status from pipeline primitives (for root coverage icon only)
+  const rootCoverageStatus = (() => {
+    if (ctx.isSetupPhase) return null;
+    const outlinePrims = ctx.primitivesByLocation['outline-node'];
+    if (!outlinePrims) return null;
+    const prim = outlinePrims.find(
+      p => p.type === 'node-icon' && p.params.nodeId === block.id && p.params.status
+    );
+    if (!prim) return null;
+    return prim.params.status as 'covered' | 'partial' | 'missing';
+  })();
 
   // Sizes and styles
   const chevronSize = "h-4 w-4";
@@ -127,9 +133,7 @@ export function RootIntentBlock({ block, rootIndex }: RootIntentBlockProps) {
 
   return (
     <div className={`mb-4 group relative rounded-xl transition-all ${
-      ctx.activeDiffSession?.sourceSectionId === block.id
-        ? 'bg-primary/[0.03] ring-1 ring-primary/15 p-2 -m-2'
-        : ''
+      ''
     }`}>
       {dropIndicator}
       <div className="flex flex-row items-stretch">
@@ -154,13 +158,11 @@ export function RootIntentBlock({ block, rootIndex }: RootIntentBlockProps) {
             {/* Header Row */}
             <div className="flex items-start gap-2">
               {/* Coverage status icon - shown after check */}
-              {driftStatus && (() => {
-                const rootCoverage = driftStatus.intentCoverage.find(c => c.intentId === block.id);
-                if (!rootCoverage || block.changeStatus) return null;
+              {rootCoverageStatus && !block.changeStatus && (() => {
                 const isRootAiCovered = ctx.aiCoveredIntents?.has(block.id) || false;
                 return (
                   <div className="flex-shrink-0 mt-1">
-                    <CoverageIcon status={rootCoverage.status} aiCovered={isRootAiCovered} className="h-4 w-4" />
+                    <CoverageIcon status={rootCoverageStatus} aiCovered={isRootAiCovered} className="h-4 w-4" />
                   </div>
                 );
               })()}
@@ -210,28 +212,6 @@ export function RootIntentBlock({ block, rootIndex }: RootIntentBlockProps) {
                   </div>
                 )}
 
-                {/* Intent Update Preview Panel */}
-                {ctx.pendingIntentSuggestion?.intentId === block.id && (
-                  <IntentUpdatePreviewPanel
-                    currentIntent={ctx.pendingIntentSuggestion.currentContent}
-                    suggestedIntent={ctx.pendingIntentSuggestion.suggestedContent}
-                    relatedImpacts={ctx.pendingIntentSuggestion.relatedImpacts}
-                    isLoading={ctx.pendingIntentSuggestion.isLoadingImpact}
-                    onAccept={() => {
-                      ctx.updateIntentBlockRaw(block.id, {
-                        previousContent: block.content,
-                        changeStatus: 'modified',
-                        changeBy: ctx.currentUser.id,
-                        changeByName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email,
-                        changeAt: Date.now(),
-                      });
-                      ctx.updateBlock(block.id, ctx.pendingIntentSuggestion!.suggestedContent);
-                      ctx.setPendingIntentSuggestion(null);
-                      setTimeout(() => ctx.triggerCheck?.(block.id), 500);
-                    }}
-                    onCancel={() => ctx.setPendingIntentSuggestion(null)}
-                  />
-                )}
               </div>
 
               {/* Right side: Assign + Link + Actions */}
@@ -304,37 +284,11 @@ export function RootIntentBlock({ block, rootIndex }: RootIntentBlockProps) {
                     </button>
 
                     {showRootActions && (
-                      <div
+                      <RootActionMenu
                         ref={rootActionsRef}
-                        className="absolute right-0 top-full mt-1 z-20 bg-popover border rounded-lg shadow-lg p-1 min-w-[220px]"
-                      >
-                        <button
-                          onClick={() => {
-                            setShowRootActions(false);
-                            ctx.openProposalDraft(block.id, 'change', block.id);
-                          }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-muted rounded-md transition-colors text-left"
-                        >
-                          <Pencil className="h-4 w-4 text-blue-600 flex-shrink-0" />
-                          <div>
-                            <div className="font-medium">Propose a change</div>
-                            <div className="text-xs text-muted-foreground">Edit this section&apos;s outline</div>
-                          </div>
-                        </button>
-                        <button
-                          onClick={() => {
-                            setShowRootActions(false);
-                            ctx.openProposalDraft(block.id, 'comment', block.id);
-                          }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-muted rounded-md transition-colors text-left"
-                        >
-                          <MessageSquare className="h-4 w-4 text-amber-500 flex-shrink-0" />
-                          <div>
-                            <div className="font-medium">Leave a comment</div>
-                            <div className="text-xs text-muted-foreground">Share a thought about this section</div>
-                          </div>
-                        </button>
-                      </div>
+                        blockId={block.id}
+                        onClose={() => setShowRootActions(false)}
+                      />
                     )}
                   </div>
                 )}
@@ -342,45 +296,7 @@ export function RootIntentBlock({ block, rootIndex }: RootIntentBlockProps) {
             </div>
           </div>
 
-          {/* Incoming change notifications — shown on impacted sections */}
-          {!ctx.isSetupPhase && (() => {
-            const notifications = ctx.getSectionNotifications(block.id);
-            const unacked = notifications.filter(n =>
-              !n.acknowledged && n.notifyLevel !== 'skip'
-              // Negotiate types are shown in ActionRequiredBar, not here
-              && n.proposeType !== 'negotiate' && n.proposeType !== 'input' && n.proposeType !== 'discussion'
-            );
-            if (unacked.length === 0) return null;
-            return (
-              <div className="mt-2 space-y-2">
-                {unacked.map(n => (
-                  <NotificationCard
-                    key={n.proposalId}
-                    notification={n}
-                    onAcknowledge={() => {
-                      fetch('/api/proposals/vote', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ proposalId: n.proposalId, vote: 'acknowledge' }),
-                      }).then(() => ctx.refreshProposals());
-                    }}
-                    onViewDetails={() => {
-                      ctx.setViewingProposalId(n.proposalId);
-                      ctx.setViewingProposalForSectionId(block.id);
-                      ctx.setViewingProposalAffectedSectionId(block.id);
-                    }}
-                    onEscalate={() => {
-                      fetch('/api/proposals/vote', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ proposalId: n.proposalId, vote: 'escalate' }),
-                      }).then(() => ctx.refreshProposals());
-                    }}
-                  />
-                ))}
-              </div>
-            );
-          })()}
+          {/* Incoming change notifications now handled by NegotiateRunner in WritingSectionPanel */}
 
           {/* Render children */}
           {renderChildren()}
@@ -422,121 +338,47 @@ export function RootIntentBlock({ block, rootIndex }: RootIntentBlockProps) {
   );
 }
 
-// ─── Heads-up notification card (lightweight, dismissible) ───
+// ─── Dynamic action menu from registered coordination paths ───
 
-function NotificationCard({
-  notification: n,
-  onAcknowledge,
-  onViewDetails,
-  onEscalate,
-}: {
-  notification: SectionNotification;
-  onAcknowledge: () => void;
-  onViewDetails: () => void;
-  onEscalate: () => void;
-}) {
-  const isStrong = n.notifyLevel === 'notify';
-  // Note: negotiate types are filtered out by the caller — this component only handles 'decided'
+const RootActionMenu = React.forwardRef<HTMLDivElement, { blockId: string; onClose: () => void }>(
+  function RootActionMenu({ blockId, onClose }, ref) {
+    const ctx = useIntentPanelContext();
 
-  return (
-    <div className={`rounded-lg border ${
-      isStrong
-        ? n.impactLevel === 'significant'
-          ? 'bg-amber-50/50 border-amber-200 dark:bg-amber-900/15 dark:border-amber-800'
-          : 'bg-blue-50/50 border-blue-200 dark:bg-blue-900/15 dark:border-blue-800'
-        : 'bg-muted/20 border-border'
-    }`}>
-      {/* 1. Who changed where → affects your part */}
-      <div className="flex items-center gap-2 px-3 pt-2.5 pb-1.5">
-        <UserAvatar
-          avatarUrl={n.proposedByAvatar}
-          name={n.proposedByName}
-          className="h-5 w-5 flex-shrink-0"
-        />
-        <div className="text-xs flex-1 min-w-0">
-          <span className="font-semibold">{n.proposedByName}</span>
-          <span className="text-muted-foreground"> changed </span>
-          <span className="font-semibold">{n.sourceSectionName}</span>
-          <span className="text-muted-foreground">, affecting your section</span>
-        </div>
-      </div>
-
-      {/* 2. What's affected + how */}
-      {n.suggestedChanges && n.suggestedChanges.length > 0 ? (
-        <div className="px-3 pb-1.5">
-          <div className="space-y-1 ml-7">
-            {n.suggestedChanges.map((sc, idx) => (
-              <div
-                key={idx}
-                className={`flex items-start gap-1.5 text-xs rounded px-2 py-1 ${
-                  sc.action === 'add' ? 'bg-emerald-50/80 dark:bg-emerald-900/15' :
-                  sc.action === 'remove' ? 'bg-red-50/80 dark:bg-red-900/15' :
-                  'bg-amber-50/80 dark:bg-amber-900/15'
-                }`}
-              >
-                {sc.action === 'add' && <Plus className="h-3 w-3 text-emerald-600 flex-shrink-0 mt-0.5" />}
-                {sc.action === 'modify' && <Edit2 className="h-3 w-3 text-amber-600 flex-shrink-0 mt-0.5" />}
-                {sc.action === 'remove' && <Minus className="h-3 w-3 text-red-500 flex-shrink-0 mt-0.5" />}
-                <div className="flex-1 min-w-0">
-                  <span className={sc.action === 'remove' ? 'line-through text-red-500/70' : ''}>
-                    {sc.content}
-                  </span>
-                  {sc.reason && (
-                    <span className="text-muted-foreground ml-1">— {sc.reason}</span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="px-3 pb-1.5 ml-7 text-xs text-muted-foreground">
-          {n.reason}
-        </div>
-      )}
-
-      {/* 3. Why — reasoning / personal note */}
-      <div className="px-3 pb-2 ml-7">
-        {n.personalNote ? (
-          <div className="text-xs text-foreground/70 italic leading-relaxed">
-            &ldquo;{n.personalNote}&rdquo;
-          </div>
-        ) : n.suggestedChanges && n.suggestedChanges.length > 0 ? (
-          <div className="text-xs text-muted-foreground leading-relaxed">
-            {n.reason}
-          </div>
-        ) : null}
-      </div>
-
-      {/* 4. Actions — Review + OK/Got it + optional Discuss */}
-      <div className="flex items-center gap-2 px-3 pb-2.5 ml-7">
+    return (
+      <div
+        ref={ref}
+        className="absolute right-0 top-full mt-1 z-20 bg-popover border rounded-lg shadow-lg p-1 min-w-[220px]"
+      >
+        {/* Propose Change — Gate decides which coordination path */}
         <button
-          onClick={(e) => { e.stopPropagation(); onViewDetails(); }}
-          className={`flex items-center gap-1 text-[10px] font-medium transition-colors px-2.5 py-1 rounded-md border ${
-            isStrong
-              ? 'bg-primary text-primary-foreground border-primary hover:bg-primary/90'
-              : 'text-primary border-primary/30 hover:bg-primary/5'
-          }`}
+          onClick={() => {
+            onClose();
+            ctx.openProposalDraft(blockId, 'change', blockId);
+          }}
+          className="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-muted rounded-md transition-colors text-left"
         >
-          <Eye className="h-3 w-3" />
-          Review
+          <Edit2 className="h-4 w-4 text-primary flex-shrink-0" />
+          <div>
+            <div className="font-medium">Propose Change</div>
+            <div className="text-xs text-muted-foreground">Edit this section&apos;s outline (Gate decides coordination)</div>
+          </div>
         </button>
+        {/* Leave a Comment */}
         <button
-          onClick={(e) => { e.stopPropagation(); onAcknowledge(); }}
-          className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded-md hover:bg-muted border"
+          onClick={() => {
+            onClose();
+            ctx.openProposalDraft(blockId, 'comment', blockId);
+          }}
+          className="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-muted rounded-md transition-colors text-left"
         >
-          <Check className="h-3 w-3" />
-          {isStrong ? 'OK' : 'Got it'}
+          <MessageSquare className="h-4 w-4 text-amber-500 flex-shrink-0" />
+          <div>
+            <div className="font-medium">Leave a Comment</div>
+            <div className="text-xs text-muted-foreground">Share a thought about this section</div>
+          </div>
         </button>
-        {isStrong && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onEscalate(); }}
-            className="flex items-center gap-1 text-[10px] font-medium text-amber-600 hover:text-amber-700 transition-colors px-2 py-1 rounded-md hover:bg-amber-50 border border-amber-200 dark:border-amber-800"
-          >
-            Discuss
-          </button>
-        )}
       </div>
-    </div>
-  );
-}
+    );
+  }
+);
+

@@ -1,13 +1,12 @@
 // ─── Function Protocol ───
 //
-// A function is a unit of analysis, checking, or transformation
-// that runs against a document's current state (DocumentSnapshot).
+// A function is an atomic computational capability.
+// It takes the data model as input and produces structured output
+// with rendering declarations (display bindings).
 //
-// Each function declares:
-//   1. What it needs from the snapshot (required fields)
-//   2. What it outputs (schema)
-//   3. What UI components it uses to display results
-//   4. How to execute it (API endpoint or inline function)
+// Functions are the shared base layer — both Awareness Protocols and
+// Coordination Protocols reference functions but do not own them.
+// A function does not know which protocol invokes it or when.
 //
 // Register a new function:
 //   import { registerFunction } from '@/platform/functions/protocol';
@@ -19,23 +18,14 @@ import type { UIBinding } from '../primitives/registry';
 
 
 // ═══════════════════════════════════════════════════════
-// FUNCTION INPUT — what a function receives
+// FUNCTION INPUT
 // ═══════════════════════════════════════════════════════
-//
-// Every function gets the full DocumentSnapshot.
-// It also gets an optional "focus" — a specific target
-// the function should analyze (e.g. a specific section,
-// a proposed change, etc.)
 
 /** Focus: a specific section or item the function targets */
 export type FunctionFocus = {
-  /** The section being analyzed */
   sectionId: string;
-  /** Optional: specific item within the section */
   intentId?: string;
-  /** Optional: proposed changes to evaluate */
   proposedChanges?: ProposedChange[];
-  /** Optional: extra context (comment text, coverage info, etc.) */
   extra?: Record<string, unknown>;
 };
 
@@ -55,8 +45,6 @@ export type FunctionInput = {
   config: Record<string, unknown>;
 };
 
-
-// UI bindings are defined in platform/primitives/registry.ts
 // Re-export for convenience
 export type { UIBinding } from '../primitives/registry';
 
@@ -74,54 +62,64 @@ export type FunctionDefinition = {
   description: string;
   /** Lucide icon name */
   icon: string;
-  /** When this function runs */
-  trigger: 'detection' | 'proposal' | 'on-demand';
+
+  // ─── Execution ───
+  /** How to execute: 'prompt' (AI), 'local' (JS function), 'api' (HTTP endpoint) */
+  executor: 'api' | 'local' | 'prompt';
+
+  /** For 'api' executor: the endpoint to call */
+  endpoint?: string;
+  /** For 'local' executor: inline implementation */
+  fn?: (input: FunctionInput) => Promise<FunctionResult | { data: Record<string, unknown> }> | FunctionResult | { data: Record<string, unknown> };
+  /** For 'prompt' executor: the AI prompt template */
+  prompt?: {
+    system: string;
+    user: string;
+    model?: string;
+    temperature?: number;
+  };
 
   // ─── Data contract ───
   /** Which snapshot fields this function requires */
   requires: {
-    writing?: boolean;      // needs writing content
-    dependencies?: boolean; // needs dependency graph
-    members?: boolean;      // needs team info
+    writing?: boolean;
+    dependencies?: boolean;
+    members?: boolean;
   };
-
   /** Describes the shape of the result object */
   outputSchema: Record<string, string>;
+  /** Structured output type definition */
+  output?: { type: string; fields: Record<string, string> };
 
-  // ─── UI contract ───
+  // ─── Display contract ───
+  /** How to render output — binds output fields to View Layer primitives */
   ui: UIBinding[];
 
   // ─── Configuration ───
+  /** Config fields for function-level tuning (e.g., prompt focus) */
   configFields: ConfigField[];
+  /** Default values for config fields */
   defaultConfig: Record<string, unknown>;
 
-  // ─── Execution ───
-  executor: 'api' | 'local' | 'prompt';
-  /** For 'api' executor: the endpoint to call */
-  endpoint?: string;
-  /** For 'local' executor: inline implementation.
-   *  Can return just { data: {...} } — the runner fills in functionId, ui, computedAt. */
-  fn?: (input: FunctionInput) => Promise<FunctionResult | { data: Record<string, unknown> }> | FunctionResult | { data: Record<string, unknown> };
-  /**
-   * For 'prompt' executor: define the AI prompt.
-   * The platform calls the AI, parses the response against outputSchema,
-   * and returns the result. Developer only writes the prompt.
-   */
-  prompt?: {
-    /** System instruction for the AI */
-    system: string;
-    /**
-     * User message template. Use {{snapshot.field}} to reference data.
-     * Available: {{nodes}}, {{writing}}, {{dependencies}}, {{assignments}},
-     * {{members}}, {{focus}}, {{config}}.
-     * Arrays are formatted as readable text automatically.
-     */
-    user: string;
-    /** Optional: model to use (default: gpt-4o) */
-    model?: string;
-    /** Optional: temperature (default: 0.3) */
-    temperature?: number;
-  };
+  // ─── Chaining ───
+  /** IDs of functions whose stored results this function can read */
+  dependsOn?: string[];
+
+  // ─── Legacy fields (kept for backward compatibility with builtin registrations) ───
+  /** @deprecated Use Awareness Protocol trigger options instead */
+  trigger?: string;
+  /** @deprecated Use Awareness Protocol instead */
+  category?: string;
+  /** @deprecated Use Awareness Protocol trigger options instead */
+  triggerOptions?: Array<{ value: string; label: string; config?: Record<string, unknown> }>;
+  /** @deprecated Use Awareness Protocol default trigger instead */
+  defaultTrigger?: string;
+  /** @deprecated Metadata only — not used by runtime */
+  target?: { type: string; description?: string };
+  /** @deprecated Use Awareness Protocol config fields instead */
+  options?: Array<{ key: string; label: string; type: string; choices?: Array<{ value: string; label: string }>; default: unknown; description?: string }>;
+  /** @deprecated Use ui instead */
+  display?: UIBinding[];
 };
 
 
@@ -129,10 +127,30 @@ export type FunctionDefinition = {
 // FUNCTION RESULT
 // ═══════════════════════════════════════════════════════
 
+// ─── Mutations ───
+// Functions can return mutations to modify the outline.
+// The runtime executes them — functions stay pure (declare what, not how).
+
+export type BlockMutation =
+  | { type: 'update-block'; blockId: string; updates: Record<string, unknown> }
+  | { type: 'update-content'; blockId: string; content: string }
+  | { type: 'add-block'; parentId: string; content: string; updates?: Record<string, unknown> }
+  | { type: 'delete-block'; blockId: string };
+
+/** Callbacks the runtime provides to execute mutations */
+export type MutationExecutor = {
+  updateBlockRaw: (blockId: string, updates: Record<string, unknown>) => void;
+  updateBlock: (blockId: string, content: string) => void;
+  addBlock: (options: { asChildOf: string }) => { id: string };
+  deleteBlock: (blockId: string) => void;
+};
+
 export type FunctionResult = {
   functionId: string;
   data: Record<string, unknown>;
   ui: UIBinding[];
+  /** Mutations to apply to the outline. Executed by the runtime, not the function. */
+  mutations?: BlockMutation[];
   computedAt: number;
 };
 
@@ -144,6 +162,10 @@ export type FunctionResult = {
 const _functionRegistry = new Map<string, FunctionDefinition>();
 
 export function registerFunction(definition: FunctionDefinition): void {
+  // Merge display bindings into ui if provided (legacy support)
+  if (definition.display && definition.display.length > 0) {
+    definition.ui = [...definition.ui, ...definition.display];
+  }
   _functionRegistry.set(definition.id, definition);
 }
 
@@ -153,10 +175,4 @@ export function getFunction(id: string): FunctionDefinition | undefined {
 
 export function getAllFunctions(): FunctionDefinition[] {
   return Array.from(_functionRegistry.values());
-}
-
-export function getFunctionsByTrigger(
-  trigger: FunctionDefinition['trigger']
-): FunctionDefinition[] {
-  return getAllFunctions().filter((f) => f.trigger === trigger);
 }

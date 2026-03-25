@@ -24,7 +24,7 @@ const quicksand = Quicksand({
 });
 
 export const metadata: Metadata = {
-  title: "IntentWriter - Collaborative Writing with Intent Alignment",
+  title: "Grounding Kit - Collaborative Writing with Intent Alignment",
   description:
     "Define your writing intentions upfront, then write collaboratively while staying aligned with your original goals. Real-time collaboration with drift detection.",
 };

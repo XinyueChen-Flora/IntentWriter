@@ -18,7 +18,8 @@
 //   6. Return concrete ResolvedPrimitive objects ready for rendering
 
 import type { UIBinding, PrimitiveLocation } from './registry';
-import { getPrimitive } from './registry';
+import { getPrimitive, getPrimitivesByCapability } from './registry';
+import { resolveCapabilityBinding, type CapabilityBinding } from '../views/capabilities';
 
 
 // ═══════════════════════════════════════════════════════
@@ -138,7 +139,8 @@ export function resolveBindings(
 
   for (const binding of bindings) {
     const primDef = getPrimitive(binding.type);
-    const location = primDef?.location ?? 'global';
+    // Binding can override the primitive's default location
+    const location = binding.location ?? primDef?.location ?? 'global';
 
     if (binding.forEach) {
       // ── Array binding: iterate over result array ──
@@ -194,6 +196,26 @@ export function groupByType(
   return groups;
 }
 
+/**
+ * Resolve capability-based bindings to ResolvedPrimitives.
+ * Accepts either UIBinding[] or CapabilityBinding[], normalizes both.
+ */
+export function resolveDisplayBindings(
+  bindings: (UIBinding | CapabilityBinding)[],
+  data: Record<string, unknown>,
+): ResolvedPrimitive[] {
+  const normalized: UIBinding[] = bindings.map(b => {
+    if ('on' in b && 'capability' in b) {
+      const resolved = resolveCapabilityBinding(b as CapabilityBinding);
+      if (!resolved) return null;
+      return resolved as UIBinding;
+    }
+    return b as UIBinding;
+  }).filter((b): b is UIBinding => b !== null);
+
+  return resolveBindings(normalized, data);
+}
+
 /** Group resolved primitives by render location */
 export function groupByLocation(
   primitives: ResolvedPrimitive[],
@@ -202,6 +224,7 @@ export function groupByLocation(
     'writing-editor': [],
     'outline-node': [],
     'right-panel': [],
+    'draft-panel': [],
     'global': [],
   } as Record<PrimitiveLocation, ResolvedPrimitive[]>;
 

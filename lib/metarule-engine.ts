@@ -176,6 +176,72 @@ function evaluateCondition(
   }
 }
 
+// ─── Gate Evaluation from Function Results ───
+
+import type {
+  GateThreshold,
+  GateSuggestion,
+  ImpactScope,
+  ImpactSeverity,
+  GroupInterest,
+} from './metarule-types';
+import { evaluateGateThresholds } from './metarule-types';
+
+/**
+ * Extract impact dimensions from function results for Gate evaluation.
+ * Looks at frame-proposal and assess-impact results to determine scope/severity/interest.
+ */
+export function extractImpactDimensions(
+  results: Map<string, FunctionResult>,
+): { scope: ImpactScope; severity: ImpactSeverity; groupInterest: GroupInterest } {
+  // Try frame-proposal first (it aggregates other results)
+  const framingResult = results.get('frame-proposal');
+  if (framingResult?.data) {
+    return {
+      scope: (framingResult.data.scope as ImpactScope) ?? 'same-section',
+      severity: (framingResult.data.severity as ImpactSeverity) ?? 'none',
+      groupInterest: deriveGroupInterest(framingResult.data),
+    };
+  }
+
+  // Fall back to assess-impact
+  const impactResult = results.get('assess-impact');
+  if (impactResult?.data) {
+    const impacts = (impactResult.data.impacts as Array<Record<string, unknown>>) ?? [];
+    const significantCount = impacts.filter(i => i.impactLevel === 'significant').length;
+    const minorCount = impacts.filter(i => i.impactLevel === 'minor').length;
+    const hasCrossSection = significantCount > 0 || minorCount > 0;
+
+    return {
+      scope: hasCrossSection ? 'cross-section' : 'same-section',
+      severity: significantCount > 0 ? 'significant' : minorCount > 0 ? 'minor' : 'none',
+      groupInterest: significantCount >= 2 ? 'high' : significantCount >= 1 ? 'medium' : 'low',
+    };
+  }
+
+  return { scope: 'same-section', severity: 'none', groupInterest: 'low' };
+}
+
+/** Derive group interest from framing data */
+function deriveGroupInterest(data: Record<string, unknown>): GroupInterest {
+  const impactedCount = (data.framing as Record<string, unknown>)?.impactedSectionCount as number ?? 0;
+  if (impactedCount >= 3) return 'high';
+  if (impactedCount >= 1) return 'medium';
+  return 'low';
+}
+
+/**
+ * Evaluate Gate thresholds using function results.
+ * Combines extractImpactDimensions + evaluateGateThresholds.
+ */
+export function evaluateGateFromResults(
+  thresholds: GateThreshold[],
+  results: Map<string, FunctionResult>,
+): GateSuggestion | null {
+  const { scope, severity, groupInterest } = extractImpactDimensions(results);
+  return evaluateGateThresholds(thresholds, scope, severity, groupInterest);
+}
+
 // ─── Defaults ───
 
 /** Create an empty MetaRuleV2 config */

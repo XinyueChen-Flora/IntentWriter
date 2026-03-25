@@ -52,7 +52,7 @@ export function Logo({
       <LogoIcon size={size} />
       {showText && (
         <span className={`text-primary font-bold tracking-tight ${textClassName || "text-xl"}`} style={{ fontFamily: 'var(--font-brand)' }}>
-          IntentWriter
+          GroundingKit
         </span>
       )}
     </div>
@@ -78,7 +78,7 @@ export function LogoLink({
       <LogoIcon size={size} />
       {showText && (
         <span className={`text-primary font-bold tracking-tight ${textClassName || "text-xl"}`} style={{ fontFamily: 'var(--font-brand)' }}>
-          IntentWriter
+          GroundingKit
         </span>
       )}
     </Link>

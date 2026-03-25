@@ -89,9 +89,14 @@ IMPORTANT: Return ONLY the JSON array, no markdown formatting, no explanation.`;
       if (jsonText.startsWith("```")) {
         jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
       }
+      // Try to extract JSON array if wrapped in other text
+      const jsonMatch = jsonText.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        jsonText = jsonMatch[0];
+      }
       parsed = JSON.parse(jsonText);
-    } catch {
-      console.error("Failed to parse AI response:", content);
+    } catch (parseErr) {
+      console.error("Failed to parse AI response:", parseErr instanceof Error ? parseErr.message : parseErr, "\nContent:", content?.substring(0, 200));
       return NextResponse.json({ error: "Failed to parse AI response" }, { status: 500 });
     }
 

@@ -6,6 +6,10 @@ registerFunction({
   description: 'Analyze how removing an intent affects related sections via dependencies.',
   icon: 'Trash2',
   trigger: 'proposal',
+  target: { type: 'node', description: 'Analyzes impact of removing a specific intent' },
+  category: 'proposing',
+  triggerOptions: [{ value: 'auto', label: 'Automatic on removal' }],
+  defaultTrigger: 'auto',
 
   requires: { writing: false, dependencies: true },
 

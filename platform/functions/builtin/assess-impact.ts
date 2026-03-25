@@ -6,6 +6,11 @@ registerFunction({
   description: 'Analyze how a proposed change affects other sections.',
   icon: 'Sparkles',
   trigger: 'proposal',
+  target: { type: 'section', description: 'Analyzes how proposed changes to one section affect others' },
+  category: 'proposing',
+  triggerOptions: [{ value: 'auto', label: 'Automatic on propose' }],
+  defaultTrigger: 'auto',
+  dependsOn: ['check-drift'],
 
   requires: { dependencies: false },
 
@@ -65,30 +70,7 @@ Return JSON:
     summary: "string",
   },
 
-  ui: [
-    {
-      type: 'result-list',
-      forEach: 'impacts',
-      filter: 'item.impactLevel !== "none"',
-      params: {
-        title: '{{item.sectionIntent}}',
-        badge: '{{item.impactLevel}}',
-        badgeVariant: 'warning',
-        detail: '{{item.reason}}',
-      },
-    },
-    {
-      type: 'section-alert',
-      forEach: 'impacts',
-      filter: 'item.impactLevel === "significant"',
-      params: {
-        sectionId: '{{item.sectionId}}',
-        title: 'Impact from proposed change',
-        message: '{{item.reason}}',
-        severity: 'warning',
-      },
-    },
-  ],
+  ui: [],
 
   configFields: [],
   defaultConfig: {},

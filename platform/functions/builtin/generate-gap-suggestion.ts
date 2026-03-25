@@ -3,50 +3,109 @@ import { registerFunction } from '../protocol';
 registerFunction({
   id: 'generate-gap-suggestion',
   name: 'Gap Suggestion',
-  description: 'Suggest new writing or modified intent for orphan or partially-covered sentences.',
+  description: 'For writing mode: shows scaffolded writing. For intent mode: shows proposed outline with AI-suggested change.',
   icon: 'Lightbulb',
   trigger: 'on-demand',
+  target: { type: 'node', description: 'Suggests changes for coverage gaps' },
+  category: 'on-demand',
+  dependsOn: ['check-drift'],
 
-  requires: { writing: false },
+  requires: { writing: true },
 
   executor: 'prompt',
   prompt: {
-    system: `You help fill gaps in a collaborative document where intents are not fully covered by writing.
+    system: `You help fill gaps between an outline and its writing.
 
-Given the outline, writing, and a focus indicating which intent has coverage gaps:
+Check the focus.extra.action field to determine the mode:
 
-If the focus includes action="writing":
-- Analyze the writing and suggest where and what to add
-- Find the most relevant existing sentence and suggest inserting AFTER it
-- Return: { "suggestion": { "writingSimulation": { "content": "...", "position": "after", "insertAfter": "full sentence text to insert after" } } }
+## Mode: "writing" (Change Writing)
+Show what the writing SHOULD look like if all intents were covered.
+Return:
+{
+  "mode": "writing",
+  "currentWriting": "copy the current writing verbatim",
+  "scaffoldedWriting": "rewrite with gaps filled using brief placeholder text like [Discuss X here] for missing parts",
+  "gapSummary": "what specific content is missing"
+}
 
-If the focus includes action="intent" (or no action specified):
-- Provide a modified version of the intent that better matches what was actually written
-- Make it simpler, more specific, or reworded to match reality
-- Return: { "suggestion": { "intentUpdate": "modified intent text" } }`,
+## Mode: "intent" (Change Outline)
+The user wants to adjust the outline to better match the actual writing.
+Analyze the coverage status of each intent and suggest appropriate changes:
+- "partial" coverage → suggest modifying the intent to better reflect what was actually written
+- "missing" coverage (intent exists but nothing written) → suggest removing it, or simplifying it
+- orphan content (writing exists but no matching intent) → suggest adding a new intent for it
+
+Return ONLY the intents that belong to the FOCUSED SECTION (the section identified by focus.sectionId).
+The proposedOutline should contain the section's root intent and its direct children.
+Each item MUST have: id, content, status, and isNew/isRemoved flags for the draft editor.
+
+Return:
+{
+  "mode": "intent",
+  "proposedOutline": [
+    { "id": "existing-id", "content": "unchanged text", "status": "unchanged", "isNew": false, "isRemoved": false, "originalContent": "same as content" },
+    { "id": "partial-id", "content": "AI revised text to match writing", "status": "changed", "isNew": false, "isRemoved": false, "originalContent": "what it was before", "reason": "why" },
+    { "id": "new-uuid", "content": "new intent for orphan content", "status": "added", "isNew": true, "isRemoved": false, "originalContent": "" },
+    { "id": "missing-id", "content": "original text", "status": "removed", "isNew": false, "isRemoved": true, "originalContent": "original text" },
+    ...
+  ],
+  "reason": "one-line summary of the changes"
+}
+
+IMPORTANT for intent mode:
+- Focus on the intent identified by focus.intentId or focus.extra.intentContent, but also fix nearby issues
+- Items with isNew=true are new additions; items with isRemoved=true are suggested deletions
+- The draft editor allows the user to further edit before proposing`,
     user: `## Outline
 {{nodes}}
 
 ## Writing
 {{writing}}
 
-## Gap to Fill (focus)
+## Focus (which intent to fix)
 {{focus}}`,
-    temperature: 0.7,
+    temperature: 0.5,
   },
 
   outputSchema: {
-    suggestion: "{ intentUpdate?, writingUpdate?, writingSimulation? }",
+    mode: '"writing" | "intent"',
+    currentWriting: 'string (writing mode)',
+    scaffoldedWriting: 'string (writing mode)',
+    gapSummary: 'string (writing mode)',
+    proposedOutline: 'Array<{id, content, status, originalContent?, reason?}> (intent mode)',
+    reason: 'string (intent mode)',
   },
 
   ui: [
+    // ─── Writing mode: diff renders in writing panel (right side) ───
     {
-      type: 'inline-widget',
-      when: 'suggestion.writingSimulation',
+      type: 'diff-view',
+      location: 'right-panel',
+      when: 'mode === "writing"',
       params: {
-        anchor: '{{suggestion.writingSimulation.insertAfter}}',
-        content: '{{suggestion.writingSimulation.content}}',
-        variant: 'suggestion',
+        before: '{{currentWriting}}',
+        after: '{{scaffoldedWriting}}',
+      },
+    },
+    {
+      type: 'banner',
+      location: 'right-panel',
+      when: 'mode === "writing" && gapSummary',
+      params: {
+        title: 'Gaps to fill',
+        message: '{{gapSummary}}',
+        severity: 'info',
+      },
+    },
+
+    // ─── Intent mode: editable draft of proposed outline changes ───
+    {
+      type: 'draft-editor',
+      when: 'mode === "intent"',
+      params: {
+        items: '{{proposedOutline}}',
+        action: 'update-draft',
+        addLabel: 'Add intent',
       },
     },
   ],

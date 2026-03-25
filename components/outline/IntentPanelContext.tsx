@@ -5,92 +5,15 @@ import type { IntentBlock, WritingBlock, IntentDependency } from "@/lib/partykit
 import type { DocumentMember } from "@/lib/types";
 import type { User } from "@supabase/supabase-js";
 import type { MetaRuleConfig } from "@/lib/metarule-types";
-import type { DriftStatus, OrphanSentence, DependencyIssue, SentenceAnchor, SupportingSentence, SimulatedOutline, AlignedIntent } from "@/hooks/useDriftDetection";
+import type { ResolvedPrimitive } from "@/platform/primitives/resolver";
+import type { PrimitiveLocation } from "@/platform/primitives/registry";
+import type { FunctionFocus } from "@/platform/functions/protocol";
+import type { DocumentSnapshot } from "@/platform/data-model";
+// Legacy types kept for TipTap bridge compatibility
+import type { SentenceAnchor, SupportingSentence, OrphanSentence, DependencyIssue, AlignedIntent } from "@/lib/primitive-to-tiptap";
 
-// Writing simulation info (where and what to insert)
-export type WritingSimulation = {
-  insertAfter?: string;
-  insertBefore?: string;
-  replaceStart?: string;
-  content: string;
-  position: 'start' | 'end' | 'after' | 'before' | 'replace';
-};
-
-// Pending writing suggestion (from "Update Writing" button)
-export type PendingWritingSuggestion = {
-  intentId: string;
-  rootIntentId: string;
-  intentContent: string;
-  suggestedContent: string;
-  simulation?: WritingSimulation;
-};
-
-// Pending intent suggestion (from "Update Intent" button)
-export type PendingIntentSuggestion = {
-  intentId: string;
-  rootIntentId: string;
-  currentContent: string;
-  suggestedContent: string;
-  // Impact on related sections
-  relatedImpacts?: Array<{ id: string; content: string; impact: string }>;
-  isLoadingImpact?: boolean;
-};
-
-// Section impact data for cross-section diff display
-export type SectionImpactData = {
-  sectionId: string;
-  sectionIntent: string;
-  impactLevel: 'none' | 'minor' | 'significant';
-  reason: string;
-  childIntents: Array<{ id: string; content: string; position: number }>;
-  suggestedChanges?: Array<{
-    action: 'add' | 'modify' | 'remove';
-    intentId?: string;
-    content: string;
-    position: number;
-    reason: string;
-  }>;
-};
-
-// Writing preview for a section (before/after outline changes)
-export type WritingPreview = {
-  isLoading: boolean;
-  mode?: 'prose' | 'scaffold';
-  currentPreview: string;
-  changedPreview: string;
-};
-
-// Active diff session - when user is viewing outline diff
-export type ActiveDiffSession = {
-  sourceSectionId: string;  // The section that triggered the diff
-  isLoading: boolean;
-  // Impact data for other sections (keyed by sectionId)
-  sectionImpacts: Map<string, SectionImpactData>;
-  // Writing previews (keyed by sectionId) — auto for source+significant, manual for minor
-  writingPreviews: Map<string, WritingPreview>;
-  // AI-simulated outline changes for the source section (from comment flow)
-  sourceChanges?: Array<{ id: string; content: string; status: 'new' | 'modified' | 'removed'; reason?: string }>;
-  // When true, skip writing preview for source section (initiated from writing side)
-  sourceFromWriting?: boolean;
-  // For "Modify Outline" mode - intent being modified/removed
-  modifyIntent?: {
-    intentId: string;
-    intentContent: string;
-    action: 'remove' | 'reword';
-    suggestedReword?: string;
-  };
-  // The original proposal that triggered this session (from writing-phase actions)
-  proposal?: IntentProposal;
-};
-
-// Proposal from user action on intent
-export type IntentProposal = {
-  type: 'edit' | 'remove' | 'add' | 'comment';
-  intentId: string;        // The intent being acted on
-  content: string;         // New content (edit/add) or comment text
-  previousContent?: string; // For edit: what it was before
-  afterIntentId?: string;  // For add: insert after this intent
-};
+// Legacy types removed — all orchestration now goes through protocols
+// (Sense → Gate → Negotiate)
 
 // Draft item in the proposal panel (editable copy of a child intent)
 export type DraftItem = {
@@ -130,16 +53,24 @@ export type SectionNotification = {
   sourceSectionName: string;
   impactLevel: 'minor' | 'significant';
   notifyLevel: 'skip' | 'heads-up' | 'notify';
-  reason: string;
+  reason: string;                    // why this section is impacted
   personalNote?: string;
-  suggestedChanges?: Array<{
+  suggestedChanges?: Array<{         // AI's suggested changes for THIS section
     action: 'add' | 'modify' | 'remove';
     intentId?: string;
     content: string;
     reason: string;
   }>;
+  sourceChanges?: Array<{            // proposer's original changes (what they actually changed)
+    id: string;
+    content: string;
+    status: string;
+    originalContent?: string;
+    reason?: string;
+  }>;
+  reasoning?: string;                // proposer's reasoning for the change
   createdAt: string;
-  acknowledged: boolean; // whether current user has responded
+  acknowledged: boolean;
 };
 
 export type SetupTab = 'outline' | 'assign' | 'relationships';
@@ -196,21 +127,30 @@ export type IntentPanelContextValue = {
   onRegisterYjsExporter?: (blockId: string, exporter: () => Uint8Array) => void;
   onRegisterMarkdownExporter?: (blockId: string, exporter: () => Promise<string>) => void;
   onRegisterParagraphAttributionExporter?: (blockId: string, exporter: () => import("@/platform/data-model").ParagraphAttribution[]) => void;
-  // Drift detection
-  driftCheckingIds?: Set<string>;
-  triggerCheck?: (sectionId?: string) => Promise<void>;
-  getDriftStatus?: (rootIntentId: string) => DriftStatus | undefined;
+  // Pipeline (replaces drift detection)
+  primitivesByLocation: Record<PrimitiveLocation, ResolvedPrimitive[]>;
+  /** Primitives scoped to a specific section */
+  getPrimitivesForSection: (sectionId: string) => Record<PrimitiveLocation, ResolvedPrimitive[]>;
+  /** UI primitives from active sense protocols (buttons, summaries) */
+  senseProtocolUI: ResolvedPrimitive[];
+  /** Dispatch a primitive action (from outline menus, etc.) */
+  onPrimitiveAction?: (action: string, primitive: ResolvedPrimitive) => void;
+  runSenseProtocol: (protocolId: string, focus?: FunctionFocus) => Promise<void>;
+  runFunction: (functionId: string, focus?: FunctionFocus) => Promise<void>;
+  injectResult: (functionId: string, targetSectionId: string, result: import("@/platform/functions/protocol").FunctionResult) => void;
+  getCrossSectionImpact: (sectionId: string) => import("@/platform/primitives/resolver").ResolvedPrimitive[] | null;
+  clearResult: (key: string) => void;
+  clearAllResults: (sectionId?: string) => void;
+  isRunning: (functionId: string) => boolean;
+  runningFunctions: string[];
+  // TipTap bridge (derived from pipeline primitives)
   getSentenceHighlights?: (rootIntentId: string) => {
-    supporting: SupportingSentence[];  // green - fully covered
-    partial: SupportingSentence[];     // orange - partially covered
-    orphan: OrphanSentence[];          // yellow - not in outline
+    supporting: SupportingSentence[];
+    partial: SupportingSentence[];
+    orphan: OrphanSentence[];
     conflict: Array<{ anchor: SentenceAnchor; issue: DependencyIssue }>;
   };
-  // Conflict status for dependency lines (sectionId -> remoteSectionId -> issue)
-  getConflictForDependency?: (fromSectionId: string, toSectionId: string) => DependencyIssue | undefined;
-  // Simulated outline based on writing
-  getSimulatedOutline?: (rootIntentId: string) => SimulatedOutline | undefined;
-  hasSimulatedOutline?: (rootIntentId: string) => boolean;
+  getAlignedIntents?: (rootIntentId: string) => AlignedIntent[];
   // Hover state for intent-writing linking
   hoveredIntentForLink: string | null;  // intentId being hovered (for writing highlight)
   setHoveredIntentForLink: (id: string | null) => void;
@@ -226,12 +166,6 @@ export type IntentPanelContextValue = {
   blocks: readonly IntentBlock[];
   // Block ref registration
   registerBlockRef: (blockId: string, el: HTMLDivElement | null) => void;
-  // Pending writing suggestion (Intent → Writing simulation)
-  pendingWritingSuggestion: PendingWritingSuggestion | null;
-  setPendingWritingSuggestion: (suggestion: PendingWritingSuggestion | null) => void;
-  // Pending intent suggestion (Writing → Intent simulation)
-  pendingIntentSuggestion: PendingIntentSuggestion | null;
-  setPendingIntentSuggestion: (suggestion: PendingIntentSuggestion | null) => void;
   // Track intents that have AI-generated content (shown with AI badge)
   aiCoveredIntents: Set<string>;
   // AI-generated sentence mappings - for hover linking after Accept
@@ -240,15 +174,6 @@ export type IntentPanelContextValue = {
   markIntentAsCovered: (intentId: string, rootIntentId: string, sentenceAnchor: SentenceAnchor) => void;
   // Get writing content for a root intent (for API calls)
   getWritingContent?: (rootIntentId: string) => Promise<string>;
-  // Active diff session - for cross-section inline diff display
-  activeDiffSession: ActiveDiffSession | null;
-  setActiveDiffSession: (session: ActiveDiffSession | null) => void;
-  // Get impact data for a specific section (returns undefined if no active diff or section not impacted)
-  getSectionImpact?: (sectionId: string) => SectionImpactData | undefined;
-  // Propose changes (enters simulate pipeline) — single or batch
-  onProposeChange?: (proposal: IntentProposal | IntentProposal[]) => void;
-  // Request writing preview for a section (manual trigger for minor impact)
-  requestWritingPreview?: (sectionId: string) => void;
   // Proposal draft — editing state before simulation
   proposalDraft: ProposalDraft | null;
   setProposalDraft: (draft: ProposalDraft | null) => void;
@@ -266,8 +191,14 @@ export type IntentPanelContextValue = {
   // Thread expansion — which proposal thread is expanded
   expandedThreadProposalId: string | null;
   setExpandedThreadProposalId: (id: string | null) => void;
+  // Review — reviewer enters deliberate stage
+  activeReview: { proposalId: string; pathId: string; sectionId: string; notification: SectionNotification } | null;
+  startReview: (proposalId: string, pathId: string, sectionId: string, notification: SectionNotification) => void;
+  clearReview: () => void;
   // MetaRule — team's governance pipeline configuration
   metaRule?: MetaRuleConfig;
+  /** Document snapshot for function execution */
+  documentSnapshot: DocumentSnapshot | null;
 };
 
 const IntentPanelContext = createContext<IntentPanelContextValue | null>(null);

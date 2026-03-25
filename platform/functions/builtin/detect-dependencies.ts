@@ -6,6 +6,13 @@ registerFunction({
   description: 'AI-suggested relationships between outline sections.',
   icon: 'GitBranch',
   trigger: 'detection',
+  target: { type: 'document', description: 'Analyzes the full outline for cross-section relationships' },
+  category: 'setup',
+  triggerOptions: [
+    { value: 'manual', label: 'Manual trigger' },
+    { value: 'on-outline-change', label: 'When outline changes', config: { debounce: 5000 } },
+  ],
+  defaultTrigger: 'manual',
 
   requires: {},
 

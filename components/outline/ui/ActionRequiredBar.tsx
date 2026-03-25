@@ -27,7 +27,11 @@ export function ActionRequiredBar() {
         if (n.notifyLevel === 'skip') continue;
         // Only show actions for paths that require interaction (not 'decided'/immediate)
         const pathUI = getPathUI(n.proposeType);
-        if (!pathUI || pathUI.definition.resolution.type === 'immediate') continue;
+        // Skip immediate/inform paths (system resolves, no vote actions)
+        if (!pathUI) continue;
+        const def = pathUI.definition;
+        const isImmediate = def.resolve.who === 'system' && !def.deliberate.actions?.some(a => a.id === 'approve' || a.id === 'reject');
+        if (isImmediate) continue;
         if (seen.has(n.proposalId)) continue;
         seen.add(n.proposalId);
         actions.push({ ...n, affectedSectionId: block.id });
