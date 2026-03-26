@@ -196,6 +196,8 @@ export default function IntentPanel({
         reason: string;
       }>;
     }>;
+    source_changes: any[];
+    reasoning: string;
     proposal_votes: Array<{ user_id: string; vote: string }>;
   };
   const [proposals, setProposals] = useState<ProposalRecord[]>([]);

@@ -81,7 +81,7 @@ export const POST = withErrorHandler(async (request: Request) => {
 
 // Delegate resolution to the coordination engine
 async function checkResolution(
-  supabase: ReturnType<typeof import('@supabase/supabase-js').createClient>,
+  supabase: any,
   proposal: {
     id: string;
     propose_type: string;

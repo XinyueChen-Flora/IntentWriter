@@ -20,10 +20,10 @@ import { getGate } from "@/platform/gate/protocol";
 
 type WritingSectionPanelProps = {
   block: IntentBlock;
-  children: IntentBlock[];
+  sectionChildren: IntentBlock[];
 };
 
-export function WritingSectionPanel({ block, children }: WritingSectionPanelProps) {
+export function WritingSectionPanel({ block, sectionChildren }: WritingSectionPanelProps) {
   const ctx = useIntentPanelContext();
 
   const [summaryHidden, setSummaryHidden] = useState(false);
@@ -64,7 +64,7 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
   const pendingProposal = useMemo(() => {
     // Path 1: source section — any child has changeStatus='proposed'
     // Visible to everyone (proposer sees resolve, others see deliberate)
-    const proposedChild = children.find(
+    const proposedChild = sectionChildren.find(
       c => c.changeStatus === 'proposed' && c.proposalId
     );
     if (proposedChild) {
@@ -98,7 +98,7 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
     }
 
     return null;
-  }, [children, ctx.currentUser.id, block.id, ctx]);
+  }, [sectionChildren, ctx.currentUser.id, block.id, ctx]);
 
   // Track which proposal has been handled (to prevent re-detection after acknowledge)
   const prevPendingRef = useRef<string | null>(null);
@@ -216,7 +216,7 @@ export function WritingSectionPanel({ block, children }: WritingSectionPanelProp
   useEffect(() => {
     if (hasActiveProposal && !prevHasActiveProposalRef.current && !activeSenseProtocolId && !activeNegotiateId) {
       const triggerId = ctx.proposalDraft?.triggerIntentId;
-      const triggerBlock = triggerId ? [...children, block].find(b => b.id === triggerId) : null;
+      const triggerBlock = triggerId ? [...sectionChildren, block].find(b => b.id === triggerId) : null;
       clearSenseResults();
       setActiveSenseProtocolId('propose-outline-change');
       setSenseStartAtStep(undefined);

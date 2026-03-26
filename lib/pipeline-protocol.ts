@@ -47,10 +47,13 @@ export type NumberField = {
   type: 'number';
   key: string;
   label: string;
+  description?: string;
+  default?: number;
   min?: number;
   max?: number;
   unit?: string;
   prefix?: string;  // e.g. "Every"
+  showWhenTrigger?: string[];
 };
 
 /** Show child fields only when a condition is met */

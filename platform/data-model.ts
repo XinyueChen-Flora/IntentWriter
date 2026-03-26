@@ -69,9 +69,10 @@ export type SectionAssignment = {
 export type DocumentMember = {
   userId: string;
   name: string;
+  displayName?: string;
   email?: string;
   avatarUrl?: string;
-  role: 'owner' | 'editor' | 'viewer';
+  role: 'owner' | 'editor' | 'viewer' | 'member';
   joinedAt: number;
 };
 

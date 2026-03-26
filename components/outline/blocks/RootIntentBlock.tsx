@@ -331,7 +331,7 @@ export function RootIntentBlock({ block, rootIndex }: RootIntentBlockProps) {
 
         {/* Writing panel — hidden in setup phase */}
         {!ctx.isSetupPhase && (
-          <WritingSectionPanel block={block} children={children} />
+          <WritingSectionPanel block={block} sectionChildren={children} />
         )}
       </div>
     </div>

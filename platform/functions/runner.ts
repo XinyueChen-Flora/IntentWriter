@@ -54,13 +54,13 @@ export async function runFunction(
       focus: (input as FunctionInput).focus,
       config: mergedConfig,
     };
-    const result = await definition.fn(fnInput);
-    data = result.data ?? (result as any);
+    const result = await definition.fn(fnInput) as any;
+    data = result.data ?? result;
     if (result.ui && result.ui.length > 0) {
       localUi = result.ui;
     }
-    if ((result as any).mutations && (result as any).mutations.length > 0) {
-      localMutations = (result as any).mutations;
+    if (result.mutations && result.mutations.length > 0) {
+      localMutations = result.mutations;
     }
 
   } else if (definition.executor === 'prompt') {
