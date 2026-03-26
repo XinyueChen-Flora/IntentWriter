@@ -8,6 +8,8 @@ import { resolveBindings, groupByLocation, type ResolvedPrimitive } from "@/plat
 import { getAllPrimitives, type PrimitiveDefinition } from "@/platform/primitives/registry";
 import { getAllSenseProtocols, registerSenseProtocol, type SenseProtocolDefinition } from "@/platform/sense/protocol";
 import { getAllCoordinationPaths, registerCoordinationPath, type CoordinationPathDefinition } from "@/platform/coordination/protocol";
+import { getAllGates, type GateDefinition } from "@/platform/gate/protocol";
+import "@/platform/gate/builtin";
 import type { ProtocolStep } from "@/platform/protocol-types";
 import { getPathUI } from "@/platform/coordination/ui";
 import { PrimitiveRenderer } from "@/components/capability/PrimitiveRenderer";
@@ -83,7 +85,7 @@ const PREVIEW_PRIMITIVES: Record<string, ResolvedPrimitive> = {
   'progress-bar': { type: 'progress-bar', location: 'right-panel', params: { current: '3', total: '5', label: '3/5 approved', variant: 'success' } },
 };
 
-type MajorTab = 'foundation' | 'functions' | 'sense' | 'negotiate';
+type MajorTab = 'foundation' | 'functions' | 'sense' | 'gate' | 'negotiate';
 
 // ═══════════════════════════════════════════════════════
 // MAIN PAGE
@@ -183,6 +185,7 @@ export default function DevPage() {
           <MajorTabBtn active={tab === 'foundation'} onClick={() => setTab('foundation')} icon={<Layers className="h-4 w-4" />}>Foundation</MajorTabBtn>
           <MajorTabBtn active={tab === 'functions'} onClick={() => setTab('functions')} icon={<Code className="h-4 w-4" />}>Functions <Badge>{functions.length}</Badge></MajorTabBtn>
           <MajorTabBtn active={tab === 'sense'} onClick={() => setTab('sense')} icon={<Eye className="h-4 w-4" />}>Sense <Badge>{senseProtocols.length}</Badge></MajorTabBtn>
+          <MajorTabBtn active={tab === 'gate'} onClick={() => setTab('gate')} icon={<Code2 className="h-4 w-4" />}>Gate <Badge>{getAllGates().length}</Badge></MajorTabBtn>
           <MajorTabBtn active={tab === 'negotiate'} onClick={() => setTab('negotiate')} icon={<Users className="h-4 w-4" />}>Negotiate <Badge>{coordinationPaths.length}</Badge></MajorTabBtn>
         </div>
       </div>
@@ -192,6 +195,7 @@ export default function DevPage() {
         {tab === 'foundation' && <FoundationContent primitives={primitives} />}
         {tab === 'functions' && <FunctionsContent functions={functions} onRefresh={refresh} />}
         {tab === 'sense' && <SenseContent protocols={senseProtocols} onRefresh={refreshSense} />}
+        {tab === 'gate' && <GateContent />}
         {tab === 'negotiate' && <NegotiateContent paths={coordinationPaths} onRefresh={refreshCoordination} />}
       </div>
     </div>
@@ -544,6 +548,65 @@ defaultTrigger: 'on-change',`}</CodeBlock>
 // ═══════════════════════════════════════════════════════
 // NEGOTIATE TAB
 // ═══════════════════════════════════════════════════════
+
+function GateContent() {
+  const gates = getAllGates();
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-bold">Gate Protocols</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Gates sit between Sense and Negotiate, routing proposals to the right coordination path.
+        </p>
+      </div>
+      {gates.map((gate) => (
+        <div key={gate.id} className="border rounded-xl bg-card p-5 space-y-3">
+          <div>
+            <div className="font-semibold">{gate.name}</div>
+            <div className="text-sm text-muted-foreground">{gate.description}</div>
+            <div className="text-xs font-mono text-muted-foreground mt-1">{gate.id}</div>
+          </div>
+          <div>
+            <div className="text-xs font-medium text-muted-foreground mb-1">Routes</div>
+            <div className="flex gap-2 flex-wrap">
+              {gate.routes.map((r) => (
+                <span key={r} className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">{r}</span>
+              ))}
+            </div>
+          </div>
+          {gate.defaultRules.length > 0 && (
+            <div>
+              <div className="text-xs font-medium text-muted-foreground mb-1">Rules</div>
+              {gate.defaultRules.map((rule, i) => (
+                <div key={i} className="text-xs flex items-center gap-2">
+                  <span className="text-primary">→</span>
+                  <span className="font-mono bg-muted px-1.5 py-0.5 rounded">{rule.then}</span>
+                  <span className="text-muted-foreground">{rule.description}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div>
+            <div className="text-xs font-medium text-muted-foreground mb-1">Steps ({gate.steps.length})</div>
+            <div className="text-xs font-mono bg-muted/50 rounded p-2 overflow-x-auto">
+              {gate.steps.map((s, i) => (
+                <div key={i}>{s.id ? `[${s.id}] ` : ''}{s.run ? `run: ${s.run}` : ''}{s.actions ? `actions: [${s.actions.map(a => a.label).join(', ')}]` : ''}</div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs font-medium text-muted-foreground mb-1">Functions</div>
+            <div className="flex gap-2 flex-wrap">
+              {gate.functions.map((f) => (
+                <span key={f} className="text-xs bg-muted px-2 py-1 rounded font-mono">{f}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function NegotiateContent({ paths, onRefresh }: { paths: CoordinationPathDefinition[]; onRefresh: () => void }) {
   return (
