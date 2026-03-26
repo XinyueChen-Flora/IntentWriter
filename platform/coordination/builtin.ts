@@ -81,49 +81,50 @@ registerCoordinationPath({
   icon: 'Vote',
   color: 'indigo',
 
-  functions: ['render-draft', 'frame-proposal', 'render-changes-summary', 'preview-writing-impact',
-              'render-vote-progress', 'render-vote-thread', 'assess-impact',
-              'check-majority', 'preview-resolution-effect', 'apply-proposal', 'revert-proposal'],
+  functions: ['render-changes-summary', 'frame-proposal', 'render-vote-progress',
+              'render-vote-thread', 'submit-vote', 'apply-proposal', 'revert-proposal'],
 
   propose: {
     who: 'proposer',
     steps: [
-      { run: 'render-draft' },
+      { run: 'render-changes-summary' },
       { run: 'frame-proposal' },
+    ],
+    actions: [
+      { id: 'submit', label: 'Submit for Vote',
+        steps: [{ run: 'apply-proposal' }] },
+      { id: 'cancel', label: 'Cancel', stop: true },
     ],
   },
 
   deliberate: {
     who: '{{config.voters}}',
     steps: [
-      { show: 'frame-proposal' },
       { run: 'render-changes-summary' },
-      { run: 'preview-writing-impact' },
+      { run: 'frame-proposal' },
       { run: 'render-vote-progress' },
       { run: 'render-vote-thread' },
     ],
     actions: [
-      { id: 'approve', label: 'Approve' },
-      { id: 'reject', label: 'Reject' },
-      { id: 'counter-propose', label: 'Counter-propose',
-        steps: [
-          { run: 'render-draft' },
-          { run: 'assess-impact' },
-          { run: 'preview-writing-impact' },
-        ] },
+      { id: 'approve', label: 'Approve',
+        steps: [{ run: 'submit-vote', params: { vote: 'approve' } }] },
+      { id: 'reject', label: 'Reject',
+        steps: [{ run: 'submit-vote', params: { vote: 'reject' } }] },
     ],
   },
 
   resolve: {
-    who: 'system',
+    who: 'proposer',
     steps: [
-      { run: '{{config.resolutionFn}}' },
-      { run: 'preview-resolution-effect' },
+      { run: 'render-vote-progress' },
+      { run: 'render-vote-thread' },
     ],
     actions: [
-      { id: 'apply', label: 'Apply Changes',
-        steps: [{ run: 'apply-proposal' }] },
-      { id: 'revert', label: 'Revert',
+      { id: 'close-approve', label: 'Apply Changes',
+        who: ['proposer'],
+        steps: [{ run: 'apply-proposal', params: { forceApply: 'true' } }] },
+      { id: 'close-reject', label: 'Drop It',
+        who: ['proposer'],
         steps: [{ run: 'revert-proposal' }] },
     ],
   },
@@ -146,11 +147,6 @@ registerCoordinationPath({
       ],
       label: 'Resolution rule',
     },
-    deadline: {
-      default: '48h',
-      type: 'duration',
-      label: 'Voting deadline',
-    },
   },
 });
 
@@ -166,45 +162,46 @@ registerCoordinationPath({
   icon: 'MessagesSquare',
   color: 'amber',
 
-  functions: ['render-draft', 'frame-proposal', 'render-changes-summary',
-              'render-vote-thread', 'assess-impact', 'preview-writing-impact',
-              'apply-proposal', 'revert-proposal'],
+  functions: ['render-changes-summary', 'frame-proposal', 'apply-proposal', 'revert-proposal',
+              'render-vote-thread', 'submit-reply', 'submit-vote'],
 
   propose: {
     who: 'proposer',
     steps: [
-      { run: 'render-draft' },
+      { run: 'render-changes-summary' },
       { run: 'frame-proposal' },
+    ],
+    actions: [
+      { id: 'submit', label: 'Submit for Discussion',
+        steps: [{ run: 'apply-proposal' }] },
+      { id: 'cancel', label: 'Cancel', stop: true },
     ],
   },
 
   deliberate: {
     who: '{{config.participants}}',
     steps: [
-      { show: 'frame-proposal' },
       { run: 'render-changes-summary' },
+      { run: 'frame-proposal' },
       { run: 'render-vote-thread' },
     ],
     actions: [
-      { id: 'reply', label: 'Reply' },
-      { id: 'suggest-alt', label: 'Suggest alternative',
-        steps: [
-          { run: 'render-draft' },
-          { run: 'assess-impact' },
-          { run: 'preview-writing-impact' },
-        ] },
+      { id: 'reply', label: 'Reply',
+        steps: [{ run: 'submit-reply' }] },
+      { id: 'acknowledge', label: 'Acknowledge',
+        steps: [{ run: 'submit-vote', params: { vote: 'acknowledge' } }] },
     ],
   },
 
   resolve: {
     who: 'proposer',
     steps: [
-      { run: 'preview-resolution-effect' },
+      { run: 'render-vote-thread' },
     ],
     actions: [
       { id: 'close-approve', label: 'Apply Changes',
         who: ['proposer'],
-        steps: [{ run: 'apply-proposal' }] },
+        steps: [{ run: 'apply-proposal', params: { forceApply: 'true' } }] },
       { id: 'close-reject', label: 'Drop It',
         who: ['proposer'],
         steps: [{ run: 'revert-proposal' }] },

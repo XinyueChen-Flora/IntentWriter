@@ -45,7 +45,9 @@ export function ActionRequiredBar() {
   if (visibleActions.length === 0) return null;
 
   const handleClick = (action: PendingAction) => {
-    ctx.setExpandedThreadProposalId(action.proposalId);
+    // Activate deliberate panel on the SOURCE section (where changes were proposed)
+    ctx.startReview(action.proposalId, action.proposeType, action.sourceSectionId, action);
+    // Scroll to the source section
     setTimeout(() => {
       const el = document.querySelector(`[data-block-id="${action.sourceSectionId}"]`);
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -65,10 +67,12 @@ export function ActionRequiredBar() {
         const { Icon, textColor, bgColor, badgeBg, darkTextColor, darkBgColor, ctaLabel, actionText } = ui;
 
         return (
-          <button
+          <div
             key={action.proposalId}
             onClick={() => handleClick(action)}
-            className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors hover:opacity-90 ${bgColor} ${darkBgColor}`}
+            role="button"
+            tabIndex={0}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors hover:opacity-90 cursor-pointer ${bgColor} ${darkBgColor}`}
           >
             <Icon className={`h-4 w-4 ${textColor} flex-shrink-0`} />
 
@@ -94,7 +98,7 @@ export function ActionRequiredBar() {
             >
               <X className="h-3 w-3" />
             </button>
-          </button>
+          </div>
         );
       })}
     </div>

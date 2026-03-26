@@ -296,10 +296,10 @@ export function RootIntentBlock({ block, rootIndex }: RootIntentBlockProps) {
             </div>
           </div>
 
-          {/* Incoming change notifications now handled by NegotiateRunner in WritingSectionPanel */}
-
           {/* Render children */}
           {renderChildren()}
+
+          {/* Discussion/Vote threads are inline on each proposed block (ChildIntentBlockWriting) */}
 
           {/* Add child button — setup phase only */}
           {ctx.isSetupPhase && !isCollapsed && (
@@ -381,4 +381,5 @@ const RootActionMenu = React.forwardRef<HTMLDivElement, { blockId: string; onClo
     );
   }
 );
+
 

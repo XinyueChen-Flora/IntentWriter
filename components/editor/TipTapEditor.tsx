@@ -102,11 +102,44 @@ export default function TipTapEditor({
   // Manage connection lifecycle in effect (Strict Mode safe)
   useEffect(() => {
     provider.connect();
+    let recoveredRef = false;
 
-    const handleSync = () => setIsSynced(true);
+    const handleSync = async () => {
+      setIsSynced(true);
+      // If Yjs doc is empty after sync, restore from writing snapshot
+      if (!recoveredRef) {
+        recoveredRef = true;
+        const xmlFragment = doc.getXmlFragment('default');
+        if (xmlFragment.length === 0 || (xmlFragment.length === 1 && xmlFragment.toJSON() === '')) {
+          try {
+            const sectionId = intent.id;
+            const res = await fetch(`/api/writing-snapshots?documentId=${roomId}&sectionId=${sectionId}&limit=1`);
+            if (res.ok) {
+              const data = await res.json();
+              const snapshot = data.snapshots?.[0];
+              if (snapshot?.content_markdown && snapshot.content_markdown.trim()) {
+                // Insert recovered content as plain text paragraphs
+                const paragraphs = snapshot.content_markdown.split('\n').filter((p: string) => p.trim());
+                if (paragraphs.length > 0) {
+                  doc.transact(() => {
+                    for (const para of paragraphs) {
+                      const xmlText = new Y.XmlText();
+                      xmlText.insert(0, para);
+                      const xmlElement = new Y.XmlElement('paragraph');
+                      xmlElement.insert(0, [xmlText]);
+                      xmlFragment.push([xmlElement]);
+                    }
+                  });
+                }
+              }
+            }
+          } catch { /* ignore recovery errors */ }
+        }
+      }
+    };
 
     if (provider.synced) {
-      setIsSynced(true);
+      handleSync();
     } else {
       provider.on("synced", handleSync);
     }
@@ -119,9 +152,6 @@ export default function TipTapEditor({
     return () => {
       clearTimeout(timeout);
       provider.off("synced", handleSync);
-      // Only disconnect, don't destroy — Strict Mode will re-run this effect
-      // and call provider.connect() again. Actual cleanup happens when
-      // deps change (new roomId/writingBlock) which creates new useMemo instances.
       provider.disconnect();
     };
   }, [provider]);

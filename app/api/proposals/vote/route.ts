@@ -2,6 +2,7 @@
 
 import { NextResponse } from "next/server";
 import { requireAuth, isErrorResponse, withErrorHandler } from "@/lib/api/middleware";
+import { createAdminClient } from "@/lib/supabase/server";
 import { checkResolution as engineCheckResolution } from "@/platform/coordination/engine";
 import "@/platform/coordination/builtin"; // ensure paths are registered
 
@@ -20,47 +21,46 @@ export const POST = withErrorHandler(async (request: Request) => {
     );
   }
 
-  // Fetch full proposal (need propose_type, negotiate_rules, notify_user_ids for resolution)
-  const { data: proposal, error: fetchError } = await supabase
+  // Fetch full proposal using admin client (bypasses RLS)
+  const admin = createAdminClient();
+  const { data: proposal, error: fetchError } = await admin
     .from("proposals")
-    .select("id, status, propose_type, negotiate_rules, path_config, notify_user_ids, proposed_by")
+    .select("id, status, propose_type, negotiate_rules, notify_user_ids, proposed_by")
     .eq("id", proposalId)
     .single();
 
   if (fetchError || !proposal) {
-    return NextResponse.json({ error: "Proposal not found" }, { status: 404 });
+    console.error("[vote] Proposal lookup failed:", { proposalId, fetchError: fetchError?.message, hasProposal: !!proposal });
+    return NextResponse.json({ error: "Proposal not found", detail: fetchError?.message }, { status: 404 });
   }
 
   if (proposal.status !== "pending") {
     return NextResponse.json({ error: "Proposal is no longer pending" }, { status: 400 });
   }
 
-  // Upsert vote (one per user per proposal)
-  const { data: voteData, error: voteError } = await supabase
+  // Insert vote/reply — unique constraint removed, multiple replies allowed
+  const { data: voteData, error: voteError } = await admin
     .from("proposal_votes")
-    .upsert(
-      {
-        proposal_id: proposalId,
-        user_id: user.id,
-        vote,
-        comment: comment || null,
-        voted_at: new Date().toISOString(),
-      },
-      { onConflict: "proposal_id,user_id" }
-    )
+    .insert({
+      proposal_id: proposalId,
+      user_id: user.id,
+      vote,
+      comment: comment || null,
+      voted_at: new Date().toISOString(),
+    })
     .select()
     .single();
 
   if (voteError) {
     console.error("Failed to cast vote:", voteError);
-    return NextResponse.json({ error: "Failed to cast vote" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to cast vote", detail: voteError.message }, { status: 500 });
   }
 
   // ─── Check if proposal should auto-resolve via coordination engine ───
-  const resolution = await checkResolution(supabase, proposal);
+  const resolution = await checkResolution(admin, proposal);
 
   if (resolution) {
-    const { error: updateError } = await supabase
+    const { error: updateError } = await admin
       .from("proposals")
       .update({
         status: resolution,
@@ -81,13 +81,11 @@ export const POST = withErrorHandler(async (request: Request) => {
 
 // Delegate resolution to the coordination engine
 async function checkResolution(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  supabase: any,
+  supabase: ReturnType<typeof import('@supabase/supabase-js').createClient>,
   proposal: {
     id: string;
     propose_type: string;
     negotiate_rules: { voteThreshold?: string; discussionResolution?: string } | null;
-    path_config: Record<string, unknown> | null;
     notify_user_ids: string[];
     proposed_by: string;
   }
@@ -95,9 +93,7 @@ async function checkResolution(
   const pathId = proposal.propose_type;
 
   // Build path config: prefer path_config (v2), fall back to negotiate_rules (v1)
-  const pathConfig: Record<string, unknown> = proposal.path_config
-    ?? proposal.negotiate_rules
-    ?? {};
+  const pathConfig: Record<string, unknown> = proposal.negotiate_rules ?? {};
 
   // Voters = everyone in notify_user_ids (not the proposer)
   const voterIds = (proposal.notify_user_ids || []).filter(
@@ -107,7 +103,7 @@ async function checkResolution(
   if (eligibleCount === 0 && pathId !== 'decided') return null;
 
   // Fetch all votes for this proposal from eligible voters
-  const { data: votes } = await supabase
+  const { data: votes } = await (supabase as any)
     .from("proposal_votes")
     .select("user_id, vote")
     .eq("proposal_id", proposal.id)

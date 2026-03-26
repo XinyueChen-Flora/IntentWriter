@@ -328,21 +328,26 @@ export function useStepExecutor({
     }
 
     if (action.steps && action.steps.length > 0) {
-      // Execute sub-steps inline (simplified — run them sequentially)
+      // Execute sub-steps inline (sequentially, with params + mutations)
       for (const subStep of action.steps) {
         if (subStep.run && snapshotRef.current) {
           const fnId = subStep.run;
+          const params = resolveParams(subStep.params);
           setState(prev => ({ ...prev, running: fnId }));
           try {
             const result = await runFunction(fnId, {
               snapshot: snapshotRef.current!,
-              focus: { sectionId: sectionId || 'document' },
+              focus: { sectionId: sectionId || 'document', extra: { ...configRef.current, ...params } },
               config: configRef.current,
             });
             if (result.data && typeof result.data === 'object') {
               resultsRef.current[fnId] = result.data as Record<string, unknown>;
             }
             onFnResultRef.current?.(fnId, result);
+            // Execute mutations if returned
+            if (result.mutations && result.mutations.length > 0 && mutationExecRef.current) {
+              executeMutations(result.mutations, mutationExecRef.current);
+            }
           } catch (err) {
             console.error(`Sub-step ${fnId} failed:`, err);
           }

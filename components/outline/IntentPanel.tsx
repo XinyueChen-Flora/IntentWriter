@@ -259,31 +259,50 @@ export default function IntentPanel({
           si => si.sectionId === sectionId && si.impactLevel !== 'none'
         );
 
-        // Only show on sections that are impacted and assigned to current user
-        const mySection = blocks.find(b => b.id === sectionId && b.assignee === currentUser.id);
-        if (!mySection) return [];
+        const isNegotiateType = p.propose_type === 'negotiate' || p.propose_type === 'input' || p.propose_type === 'discussion';
+        const isMySection = blocks.some(b => b.id === sectionId && b.assignee === currentUser.id);
+        const isSourceSection = p.section_id === sectionId;
 
-        // Derive notify level for this section from stored notify_levels
-        // If notify_levels column is empty/missing, fall back to impact-based defaults
+        // Read path-specific participation config from MetaRule
+        const pathConfig = roomMeta?.metaRule?.pathConfigs?.[p.propose_type] || {};
+        const participantsConfig = (pathConfig.voters || pathConfig.participants || pathConfig.notifyWho || 'impacted-owners') as string;
+        const isAllMembers = participantsConfig === 'all-members';
+
+        // Determine notify level
         const storedLevels = p.notify_levels || {};
         let notifyLevel: 'skip' | 'heads-up' | 'notify' =
           (storedLevels[sectionId] as 'skip' | 'heads-up' | 'notify') || 'skip';
 
-        // Fallback: derive from impact level when notify_levels not stored
-        // Use MetaRule's default notify level when available
-        if (notifyLevel === 'skip' && impact) {
+        if (notifyLevel === 'skip' && impact && isMySection) {
           const metaDefault = roomMeta?.metaRule?.defaultNotifyLevel ?? 'heads-up';
           notifyLevel = impact.impactLevel === 'significant' ? 'notify' : metaDefault;
         }
 
-        // For negotiate types, default to 'notify' even without impact data
-        // (the proposer wants all involved people to respond)
-        const isNegotiateType = p.propose_type === 'negotiate' || p.propose_type === 'input' || p.propose_type === 'discussion';
         if (notifyLevel === 'skip' && isNegotiateType) {
-          notifyLevel = 'notify';
+          if (isSourceSection) {
+            notifyLevel = 'notify';
+          } else if (isAllMembers) {
+            // all-members: everyone gets notified
+            notifyLevel = impact ? 'notify' : 'heads-up';
+          } else {
+            // impacted-owners: only people with impacted sections
+            if (impact && isMySection) {
+              notifyLevel = 'notify';
+            } else if (isMySection) {
+              notifyLevel = 'heads-up';
+            }
+          }
         }
 
-        // No impact and no explicit notify level → skip entirely
+        // Inform (decided): only show to impacted section owners (or all if configured)
+        if (notifyLevel === 'skip' && !isNegotiateType) {
+          if (isAllMembers) {
+            notifyLevel = impact ? 'notify' : 'heads-up';
+          } else if (impact && isMySection) {
+            notifyLevel = roomMeta?.metaRule?.defaultNotifyLevel ?? 'heads-up';
+          }
+        }
+
         if (notifyLevel === 'skip') return [];
 
         // Check if user already responded
@@ -454,6 +473,14 @@ export default function IntentPanel({
         parentId: b.parentId || null,
         level: b.parentId ? 1 : 0,
         createdBy: attr,
+        // Proposal state (needed by apply-proposal/revert-proposal)
+        changeStatus: b.changeStatus,
+        proposedAction: b.proposedAction,
+        previousContent: b.previousContent,
+        proposalId: b.proposalId,
+        proposeType: (b as any).proposeType,
+        changeBy: b.changeBy,
+        changeByName: b.changeByName,
       })),
       writing,
       dependencies: (dependencies || []).map(d => ({
@@ -468,7 +495,12 @@ export default function IntentPanel({
         createdBy: attr,
       })),
       assignments: [],
-      members: [{ userId, name: currentUser.email || '', role: 'owner' as const, joinedAt: now }],
+      members: [
+        { userId, name: currentUser.email || '', displayName: currentUser.user_metadata?.name || currentUser.email || '', role: 'owner' as const, joinedAt: now },
+        ...documentMembers
+          .filter(m => m.userId !== userId)
+          .map(m => ({ userId: m.userId, name: m.email || '', displayName: m.displayName || m.email || '', role: 'member' as const, joinedAt: now })),
+      ],
     };
   }, [roomId, currentUser, blocks, writingBlocks, writingContentCache, dependencies, isSetupPhase]);
 
@@ -679,6 +711,9 @@ export default function IntentPanel({
     refreshProposals,
     expandedThreadProposalId,
     setExpandedThreadProposalId,
+    activeReview,
+    startReview,
+    clearReview,
     metaRule: roomMeta?.metaRule,
     documentSnapshot: pipelineSnapshot,
   }), [

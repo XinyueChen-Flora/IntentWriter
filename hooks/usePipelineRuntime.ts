@@ -247,8 +247,6 @@ export function usePipelineRuntime({
   > => {
     if (resultStore.size === 0) return EMPTY_LOCATIONS;
 
-    const storeKeys = [...resultStore.keys()];
-    console.log('[pipeline] getPrimitivesForSection', targetSectionId, 'keys:', storeKeys.join(', '));
 
     const allPrimitives: ResolvedPrimitive[] = [];
     for (const [key, result] of resultStore) {
@@ -276,9 +274,7 @@ export function usePipelineRuntime({
 
   // Global primitives (backward compat — all results combined)
   const primitivesByLocation = useMemo(() => {
-    const result = getPrimitivesForSection();
-    console.log('[pipeline] GLOBAL primitivesByLocation', { outlineCount: result['outline-node']?.length, writingCount: result['writing-editor']?.length, panelCount: result['right-panel']?.length });
-    return result;
+    return getPrimitivesForSection();
   }, [getPrimitivesForSection]);
 
   // Cross-section impact notifications (separate from regular primitives)

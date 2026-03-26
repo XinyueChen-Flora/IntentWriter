@@ -29,7 +29,20 @@ registerFunction({
     const sectionId = input.focus?.sectionId || 'document';
     for (const readId of gate.reads) {
       const stored = getResult(readId, sectionId);
-      if (stored) storedResults[readId] = stored.output;
+      if (stored) {
+        const output = { ...stored.output } as Record<string, unknown>;
+        // Derive computed fields for assess-impact (maxSeverity, scope, affectedCount)
+        if (readId === 'assess-impact' && Array.isArray(output.impacts)) {
+          const impacts = output.impacts as Array<{ impactLevel?: string; sectionId?: string }>;
+          const hasSignificant = impacts.some(i => i.impactLevel === 'significant');
+          const hasMinor = impacts.some(i => i.impactLevel === 'minor');
+          const nonNone = impacts.filter(i => i.impactLevel !== 'none');
+          output.maxSeverity = hasSignificant ? 'significant' : hasMinor ? 'minor' : 'none';
+          output.scope = nonNone.length > 0 ? 'cross-section' : 'same-section';
+          output.affectedCount = nonNone.length;
+        }
+        storedResults[readId] = output;
+      }
     }
 
     const teamRules = input.config?._gateRules as GateRule[] | undefined;

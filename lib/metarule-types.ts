@@ -17,6 +17,8 @@ export type MetaRuleConfig = {
   defaultNegotiateProtocol: string;
   defaultNotifyLevel: NotifyLevel;
   allowOverride: boolean;
+  /** Per-path configuration overrides (e.g. { negotiate: { voters: 'all-members', resolutionFn: 'check-unanimous' } }) */
+  pathConfigs?: Record<string, Record<string, unknown>>;
 };
 
 export type PipelineConfig = MetaRuleConfig;

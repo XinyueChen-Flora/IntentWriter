@@ -133,6 +133,32 @@ export function useRoom(roomId: string, user?: { id: string; user_metadata?: any
       switch (data.type) {
         case "sync":
           setState(data.state);
+          // If outline is empty, try to restore from Supabase
+          if (data.state?.intentBlocks?.length === 0 && roomId) {
+            fetch(`/api/outline-versions?documentId=${roomId}&limit=1`)
+              .then(res => res.ok ? res.json() : null)
+              .then(result => {
+                const version = result?.versions?.[0];
+                if (version?.nodes?.length > 0) {
+                  // Rebuild intent blocks from saved outline version
+                  const restored = version.nodes.map((n: any, i: number) => ({
+                    id: n.id,
+                    content: n.content || '',
+                    position: n.position ?? i,
+                    parentId: n.parentId || null,
+                    level: n.level ?? (n.parentId ? 1 : 0),
+                    linkedWritingIds: [],
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                    assignee: n.assignee,
+                    assigneeName: n.assigneeName,
+                  }));
+                  // Send restore to server
+                  socket.send(JSON.stringify({ type: 'restore_outline', blocks: restored }));
+                }
+              })
+              .catch(() => { /* ignore recovery errors */ });
+          }
           break;
         case "online_users":
           setOnlineUsers(data.users || []);

@@ -14,14 +14,20 @@ registerGate({
     // Step 1: Evaluate gate rules against stored sense results
     { run: 'evaluate-gate' },
     // Step 2: User confirms the suggested route
-    { actions: [
-        { id: 'accept-route', label: 'Continue', gate: true },
-        { id: 'override', label: 'Choose Path', goto: 'manual-override' },
+    { id: 'accept-route',
+      actions: [
+        { label: 'Continue', gate: true },
+        { label: 'Choose Path', goto: 'manual-override' },
       ],
       when: 'evaluate-gate.route != "personal"' },
-    // Step 3 (override): dynamically built by GateRunner from gate.routes
+    // Step 3 (override): show route choices
     { id: 'manual-override',
       run: 'render-route-choices' },
+    // Step 4: confirm override selection
+    { actions: [
+        { label: 'Confirm', gate: true },
+        { label: 'Back', goto: 'accept-route' },
+      ] },
   ],
 
   functions: ['evaluate-gate', 'render-route-choices'],

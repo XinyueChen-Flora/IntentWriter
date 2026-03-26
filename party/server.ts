@@ -123,8 +123,8 @@ export default class WritingRoomServer implements Party.Server {
     const isYjsConnection = this.room.id.includes("-writing-");
 
     if (isYjsConnection) {
-      // Yjs handles real-time sync only — no server-side persistence.
-      // Content is persisted via periodic snapshots to the database.
+      // Yjs doc is persisted to PartyKit storage (y-partykit handles this).
+      // Additionally, content is backed up via periodic snapshots to Supabase.
       return onConnect(conn, this.room);
     }
 
@@ -169,6 +169,17 @@ export default class WritingRoomServer implements Party.Server {
         this.onlineUsers.set(sender.id, user);
         const userList = Array.from(this.onlineUsers.values());
         this.room.broadcast(JSON.stringify({ type: "online_users", users: userList }));
+        break;
+      }
+
+      case "restore_outline": {
+        // Restore outline from Supabase backup (only if current state is empty)
+        const currentState = await this.room.storage.get<RoomState>("state");
+        if (currentState && currentState.intentBlocks.length === 0 && data.blocks?.length > 0) {
+          currentState.intentBlocks = data.blocks;
+          await this.room.storage.put("state", currentState);
+          this.room.broadcast(JSON.stringify({ type: "sync", state: currentState }));
+        }
         break;
       }
 

@@ -96,11 +96,14 @@ registerFunction({
       const proposedBy = (notification.proposedByName as string) || '';
 
       // Why your section is affected
+      const isGeneric = !impactReason || impactReason === 'General team update';
       ui.push({
         type: 'banner',
         params: {
-          title: 'Impact on Your Section',
-          message: impactReason || 'This change may affect your section.',
+          title: isGeneric ? 'Team Update' : 'Impact on Your Section',
+          message: isGeneric
+            ? `${proposedBy} made changes to ${(notification.sourceSectionName as string) || 'another section'}. Please review.`
+            : impactReason,
           severity: impactLevel === 'significant' ? 'warning' : 'info',
         },
       });
@@ -131,6 +134,17 @@ registerFunction({
           },
         });
       }
+
+      // Reply input for reviewer
+      ui.push({
+        type: 'text-input',
+        params: {
+          label: 'Your reply (optional)',
+          placeholder: 'Add a comment or question...',
+          action: 'set-reply',
+          rows: '2',
+        },
+      });
     } else {
       // ── Proposer view: show all affected sections + reasoning input ──
       if (allImpacts.length > 0) {

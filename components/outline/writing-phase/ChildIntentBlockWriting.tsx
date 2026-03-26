@@ -13,6 +13,9 @@ import { SortableBlockItem } from "../ui/SortableBlockItem";
 import { useIntentPanelContext } from "../IntentPanelContext";
 import { PrimitiveRenderer } from "@/components/capability/PrimitiveRenderer";
 import { WordDiff } from "@/components/simulate/WordDiff";
+import { NegotiateRunner } from "@/components/protocol/NegotiateRunner";
+import { getCoordinationPath } from "@/platform/coordination/protocol";
+import { setResult as setInteractionResult } from "@/platform/interaction-store";
 
 type ChildIntentBlockWritingProps = {
   block: IntentBlock;
@@ -274,11 +277,23 @@ export function ChildIntentBlockWriting({ block, depth }: ChildIntentBlockWritin
   );
 }
 
-// ─── Change Trace (inline, expandable reasoning) ───
+// ─── Change Trace (inline, expandable reasoning + discussion) ───
 
 function ChangeTrace({ block }: { block: IntentBlock }) {
-  const [expanded, setExpanded] = useState(false);
+  const ctx = useIntentPanelContext();
+  const [showReasoning, setShowReasoning] = useState(false);
+  const [showDiscussion, setShowDiscussion] = useState(false);
   const hasReasoning = !!(block as any).changeReasoning;
+  const isProposed = block.changeStatus === 'proposed';
+  const isProposer = block.changeBy === ctx.currentUser.id;
+
+  // For proposed blocks: look up the negotiate protocol
+  const proposalId = block.proposalId || '';
+  const notifications = isProposed ? ctx.getSectionNotifications(block.parentId || block.id) : [];
+  const notification = notifications.find(n => n.proposalId === proposalId) || null;
+  // Read proposeType from block (set by apply-proposal) > notification > default
+  const pathId = (block as any).proposeType || notification?.proposeType || 'discussion';
+  const pathDef = isProposed && pathId !== 'decided' ? getCoordinationPath(pathId) : null;
 
   const STATUS_STYLES: Record<string, string> = {
     proposed: 'bg-indigo-100 text-indigo-700',
@@ -287,25 +302,87 @@ function ChangeTrace({ block }: { block: IntentBlock }) {
     removed: 'bg-red-100 text-red-700',
   };
 
+  // Find root section id for this block
+  const getRootId = (b: IntentBlock): string => {
+    if (!b.parentId) return b.id;
+    const parent = ctx.blocks.find(p => p.id === b.parentId);
+    return parent ? getRootId(parent) : b.id;
+  };
+
   return (
     <div className="mt-0.5 px-1">
-      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground flex-wrap">
         <span className={`px-1.5 py-0.5 rounded-full font-medium ${
           STATUS_STYLES[block.changeStatus || ''] || 'bg-muted text-muted-foreground'
         }`}>{block.changeStatus}</span>
         <span>by {block.changeByName}</span>
         {hasReasoning && (
           <button
-            onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+            onClick={(e) => { e.stopPropagation(); setShowReasoning(!showReasoning); }}
             className="text-primary/70 hover:text-primary underline"
           >
-            {expanded ? 'hide reason' : 'why?'}
+            {showReasoning ? 'hide reason' : 'why?'}
+          </button>
+        )}
+        {pathDef && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowDiscussion(!showDiscussion); }}
+            className="text-amber-600 hover:text-amber-700 underline"
+          >
+            {showDiscussion ? 'hide' : isProposer ? 'manage' : 'discuss'}
           </button>
         )}
       </div>
-      {expanded && hasReasoning && (
+
+      {/* Reasoning expansion */}
+      {showReasoning && hasReasoning && (
         <div className="mt-1 px-1 py-1 text-xs text-muted-foreground bg-muted/30 rounded italic">
           {(block as any).changeReasoning}
+        </div>
+      )}
+
+      {/* Inline Discussion panel */}
+      {showDiscussion && pathDef && (
+        <div className="mt-1.5 border rounded-lg overflow-hidden border-amber-200">
+          <div className="px-2 py-1 bg-amber-50/50 flex items-center justify-between">
+            <span className="text-[10px] font-medium text-amber-700">{pathDef.name}</span>
+            <button onClick={() => setShowDiscussion(false)} className="text-[10px] text-muted-foreground">×</button>
+          </div>
+          <div className="px-2 py-1.5 bg-card">
+            <NegotiateRunner
+              protocol={pathDef}
+              stage={isProposer ? 'resolve' : 'deliberate'}
+              userRole={isProposer ? 'proposer' : 'reviewer'}
+              snapshot={ctx.documentSnapshot}
+              sectionId={getRootId(block)}
+              config={{
+                ...(ctx.metaRule?.pathConfigs?.[pathId] || {}),
+                proposalId,
+                proposedBy: block.changeByName || '',
+                notification,
+                userId: ctx.currentUser.id,
+                userName: ctx.currentUser.user_metadata?.name || ctx.currentUser.email || '',
+                pathId,
+              }}
+              onFunctionResult={() => {}}
+              onAction={(action, prim) => {
+                if ((action === 'set-reply' || action === 'set-reasoning') && prim) {
+                  const key = action === 'set-reply' ? 'reply' : 'reasoning';
+                  setInteractionResult(key, getRootId(block), { text: prim.params.value || '' });
+                }
+              }}
+              mutationExecutor={{
+                updateBlockRaw: (id, updates) => ctx.updateIntentBlockRaw(id, updates),
+                updateBlock: (id, content) => ctx.updateBlock(id, content),
+                addBlock: (opts) => ctx.addBlock(opts),
+                deleteBlock: (id) => ctx.deleteBlock(id),
+              }}
+              onActionSubmit={() => {
+                setShowDiscussion(false);
+                ctx.refreshProposals();
+              }}
+            />
+          </div>
         </div>
       )}
     </div>

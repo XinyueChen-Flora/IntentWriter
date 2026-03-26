@@ -108,7 +108,7 @@ export default function MetaRuleBuilder({
             directly from the registered sense protocols.
           </p>
           <div className="space-y-3">
-            {senseProtocols.map((protocol) => {
+            {senseProtocols.filter(p => p.triggerOptions.length > 1 || p.defaultTrigger !== 'manual').map((protocol) => {
               const entry = ensureSenseEntry(protocol.id, protocol);
               return (
                 <div
@@ -197,40 +197,89 @@ export default function MetaRuleBuilder({
         </section>
 
         <section>
-          <h2 className="text-lg font-semibold mb-1">Gate</h2>
+          <h2 className="text-lg font-semibold mb-1">Routing</h2>
           <p className="text-sm text-muted-foreground mb-4">
-            Choose which gate decides whether proposals need coordination.
+            How should the system decide which coordination path to use for proposals?
           </p>
-          <div className="space-y-2">
-            <Label className="text-xs">Gate</Label>
-            <select
-              className="w-full rounded-md border px-2 py-2 text-sm bg-background"
-              value={config.gateId ?? ""}
-              onChange={(e) =>
-                setConfig((prev) => ({
-                  ...prev,
-                  gateId: e.target.value || undefined,
-                }))
-              }
+          <div className="grid gap-2">
+            {/* Impact-based */}
+            {availableGates.map((gate) => (
+              <label
+                key={gate.id}
+                className={`flex items-start gap-3 border rounded-lg p-3 cursor-pointer ${
+                  config.gateId === gate.id
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:bg-muted/40"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="gate-mode"
+                  className="mt-1"
+                  checked={config.gateId === gate.id}
+                  onChange={() =>
+                    setConfig((prev) => ({ ...prev, gateId: gate.id }))
+                  }
+                />
+                <div>
+                  <div className="text-sm font-medium">{gate.name}</div>
+                  <div className="text-xs text-muted-foreground">{gate.description}</div>
+                </div>
+              </label>
+            ))}
+            {/* Fixed path */}
+            <label
+              className={`flex items-start gap-3 border rounded-lg p-3 cursor-pointer ${
+                config.gateId === 'fixed'
+                  ? "border-primary bg-primary/5"
+                  : "border-border hover:bg-muted/40"
+              }`}
             >
-              {availableGates.map((gate) => (
-                <option key={gate.id} value={gate.id}>
-                  {gate.name}
-                </option>
-              ))}
-            </select>
+              <input
+                type="radio"
+                name="gate-mode"
+                className="mt-1"
+                checked={config.gateId === 'fixed'}
+                onChange={() =>
+                  setConfig((prev) => ({ ...prev, gateId: 'fixed' }))
+                }
+              />
+              <div>
+                <div className="text-sm font-medium">Fixed Path</div>
+                <div className="text-xs text-muted-foreground">
+                  Skip routing — always use the same coordination path for all proposals.
+                </div>
+              </div>
+            </label>
           </div>
-        </section>
 
-        <section>
-          <h2 className="text-lg font-semibold mb-1">Coordination</h2>
-          <p className="text-sm text-muted-foreground mb-4">
-            Pick the default coordination path and how strongly you want writers
-            to be notified about changes.
-          </p>
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Default coordination path</Label>
+          {/* Impact-based: show routing rules */}
+          {config.gateId === 'impact-based' && (() => {
+            const gate = availableGates.find(g => g.id === 'impact-based');
+            if (!gate) return null;
+            return (
+              <div className="mt-3 border rounded-lg p-3 bg-muted/20">
+                <Label className="text-xs font-medium">Routing Rules</Label>
+                <div className="mt-1 space-y-1">
+                  {gate.defaultRules.map((rule, i) => (
+                    <div key={i} className="text-xs text-muted-foreground flex items-center gap-2">
+                      <span className="text-primary">→</span>
+                      <span>{rule.description}</span>
+                    </div>
+                  ))}
+                  <div className="text-xs text-muted-foreground flex items-center gap-2">
+                    <span className="text-muted-foreground">→</span>
+                    <span>Otherwise: skip coordination</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Fixed path: show path selector */}
+          {config.gateId === 'fixed' && (
+            <div className="mt-3 space-y-2">
+              <Label className="text-xs font-medium">Always use this path</Label>
               <div className="grid gap-2">
                 {coordinationPaths.map((path) => (
                   <label
@@ -247,22 +296,64 @@ export default function MetaRuleBuilder({
                       className="mt-1"
                       checked={config.defaultNegotiateProtocol === path.id}
                       onChange={() =>
-                        setConfig((prev) => ({
-                          ...prev,
-                          defaultNegotiateProtocol: path.id,
-                        }))
+                        setConfig((prev) => ({ ...prev, defaultNegotiateProtocol: path.id }))
                       }
                     />
                     <div>
                       <div className="text-sm font-medium">{path.name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {path.description}
-                      </div>
+                      <div className="text-xs text-muted-foreground">{path.description}</div>
                     </div>
                   </label>
                 ))}
               </div>
             </div>
+          )}
+        </section>
+
+        <section>
+          <h2 className="text-lg font-semibold mb-1">Coordination Settings</h2>
+          <p className="text-sm text-muted-foreground mb-4">
+            Configure participation and resolution settings for each coordination path.
+          </p>
+          <div className="space-y-4">
+            {coordinationPaths.map((path) => {
+              const pathConfigDef = path.config as Record<string, { default: string; options: Array<string | { value: string; label: string }>; label: string }> | undefined;
+              if (!pathConfigDef || Object.keys(pathConfigDef).length === 0) return null;
+              const savedValues = config.pathConfigs?.[path.id] || {};
+              return (
+                <div key={path.id} className="border rounded-lg p-3 space-y-2">
+                  <div className="text-sm font-medium">{path.name}</div>
+                  {Object.entries(pathConfigDef).map(([key, field]) => {
+                    const currentValue = (savedValues[key] as string) || field.default;
+                    return (
+                      <div key={key} className="space-y-1">
+                        <Label className="text-xs">{field.label}</Label>
+                        <select
+                          className="w-full rounded-md border px-2 py-2 text-sm bg-background"
+                          value={currentValue}
+                          onChange={(e) => setConfig((prev) => ({
+                            ...prev,
+                            pathConfigs: {
+                              ...prev.pathConfigs,
+                              [path.id]: {
+                                ...(prev.pathConfigs?.[path.id] || {}),
+                                [key]: e.target.value,
+                              },
+                            },
+                          }))}
+                        >
+                          {field.options.map((opt) => {
+                            const value = typeof opt === 'string' ? opt : opt.value;
+                            const label = typeof opt === 'string' ? opt : opt.label;
+                            return <option key={value} value={value}>{label}</option>;
+                          })}
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
 
             <div className="space-y-1">
               <Label className="text-xs">Default notify level</Label>
