@@ -283,7 +283,7 @@ function ChangeTrace({ block }: { block: IntentBlock }) {
   const ctx = useIntentPanelContext();
   const [showReasoning, setShowReasoning] = useState(false);
   const [showDiscussion, setShowDiscussion] = useState(false);
-  const hasReasoning = !!(block as any).changeReasoning;
+  const hasReasoning = !!block.changeReasoning;
   const isProposed = block.changeStatus === 'proposed';
   const isProposer = block.changeBy === ctx.currentUser.id;
 
@@ -292,7 +292,7 @@ function ChangeTrace({ block }: { block: IntentBlock }) {
   const notifications = isProposed ? ctx.getSectionNotifications(block.parentId || block.id) : [];
   const notification = notifications.find(n => n.proposalId === proposalId) || null;
   // Read proposeType from block (set by apply-proposal) > notification > default
-  const pathId = (block as any).proposeType || notification?.proposeType || 'discussion';
+  const pathId = block.proposeType || notification?.proposeType || 'discussion';
   const pathDef = isProposed && pathId !== 'decided' ? getCoordinationPath(pathId) : null;
 
   const STATUS_STYLES: Record<string, string> = {
@@ -337,7 +337,7 @@ function ChangeTrace({ block }: { block: IntentBlock }) {
       {/* Reasoning expansion */}
       {showReasoning && hasReasoning && (
         <div className="mt-1 px-1 py-1 text-xs text-muted-foreground bg-muted/30 rounded italic">
-          {(block as any).changeReasoning}
+          {block.changeReasoning}
         </div>
       )}
 

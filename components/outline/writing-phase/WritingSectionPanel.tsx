@@ -679,8 +679,8 @@ export function WritingSectionPanel({ block, sectionChildren }: WritingSectionPa
         {/* Summary section — all results (global banners + panel items) in one collapsible block */}
         {(() => {
           const allResults = [
-            ...sectionPrimitives['global'],
-            ...sectionPrimitives['right-panel'],
+            ...(sectionPrimitives['global'] || []),
+            ...(sectionPrimitives['right-panel'] || []),
           ];
           if (allResults.length === 0) return null;
 

@@ -480,7 +480,7 @@ export default function IntentPanel({
         proposedAction: b.proposedAction,
         previousContent: b.previousContent,
         proposalId: b.proposalId,
-        proposeType: (b as any).proposeType,
+        proposeType: b.proposeType,
         changeBy: b.changeBy,
         changeByName: b.changeByName,
       })),

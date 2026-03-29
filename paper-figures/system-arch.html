@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Data Model</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #fff;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    padding: 40px 20px;
+  }
+  .figure { width: 920px; position: relative; }
+
+  /* ═══ Class box ═══ */
+  .cls {
+    background: #fff;
+    border: 2px solid #374151;
+    border-radius: 6px;
+    position: absolute;
+    min-width: 140px;
+  }
+  .cls-header {
+    padding: 6px 10px;
+    border-bottom: 1.5px solid #374151;
+    font-size: 13px;
+    font-weight: 800;
+    color: #1f2937;
+  }
+  .cls-header-sub {
+    font-size: 9px;
+    font-weight: 400;
+    color: #888;
+    display: block;
+    font-style: italic;
+  }
+  .cls-body {
+    padding: 6px 10px;
+  }
+  .cls-field {
+    font-size: 10px;
+    color: #374151;
+    line-height: 1.7;
+    display: flex;
+    gap: 4px;
+  }
+  .cls-field-name {
+    font-weight: 600;
+    color: #1f2937;
+  }
+  .cls-field-type {
+    color: #888;
+    font-size: 9px;
+  }
+
+  /* Colored sub-items (like PolicyKit's platform-specific classes) */
+  .cls-sub {
+    padding: 4px 10px;
+    font-size: 9.5px;
+    font-weight: 600;
+    border-top: 1px solid #e5e7eb;
+  }
+  .cls-sub-sense { background: #ede9fe; color: #5b21b6; }
+  .cls-sub-neg { background: #ffe4e6; color: #be185d; }
+  .cls-sub-builtin { background: #f3f4f6; color: #555; }
+
+  /* Section labels */
+  .section-label {
+    position: absolute;
+    font-size: 12px;
+    font-weight: 800;
+    color: #374151;
+  }
+  .section-label-sub {
+    font-size: 9px;
+    font-weight: 400;
+    color: #999;
+    font-style: italic;
+  }
+
+  /* Background zones */
+  .zone {
+    position: absolute;
+    border-radius: 8px;
+    border: 1.5px solid;
+  }
+
+  /* SVG arrows */
+  .arrows-svg {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+
+  /* Caption */
+  .caption {
+    margin-top: 16px;
+    font-size: 10.5px;
+    color: #374151;
+    line-height: 1.6;
+    font-family: 'Times New Roman', Georgia, serif;
+  }
+  .caption strong { font-weight: 700; }
+</style>
+</head>
+<body>
+
+<div class="figure">
+
+  <!-- Container for diagram -->
+  <div style="position:relative; height: 560px;" id="diagram">
+
+    <!-- ═══ Background zones ═══ -->
+    <div class="zone" style="left:0; top:0; width:600px; height:260px; border-color:#e5e7eb; background:#f9fafb;">
+    </div>
+    <div style="position:absolute; left:12px; top:8px; font-size:10px; font-weight:700; color:#999; text-transform:uppercase; letter-spacing:0.08em;">Protocol Layer</div>
+
+    <div class="zone" style="left:0; top:280px; width:600px; height:130px; border-color:#e5e7eb; background:#fafafa;">
+    </div>
+    <div style="position:absolute; left:12px; top:288px; font-size:10px; font-weight:700; color:#999; text-transform:uppercase; letter-spacing:0.08em;">Function Layer</div>
+
+    <div class="zone" style="left:0; top:430px; width:920px; height:120px; border-color:#374151; background:#f3f4f6;">
+    </div>
+    <div style="position:absolute; left:12px; top:438px; font-size:10px; font-weight:700; color:#555; text-transform:uppercase; letter-spacing:0.08em;">Foundation (platform-defined)</div>
+
+    <!-- ═══ SENSE PROTOCOL ═══ -->
+    <div class="cls" id="clsSense" style="left:16px; top:30px; width:175px;">
+      <div class="cls-header" style="background:#f5f3ff; color:#4f46e5;">
+        SenseProtocol
+      </div>
+      <div class="cls-body">
+        <div class="cls-field"><span class="cls-field-name">id</span></div>
+        <div class="cls-field"><span class="cls-field-name">functions</span> <span class="cls-field-type">FunctionID[]</span></div>
+        <div class="cls-field"><span class="cls-field-name">triggerOptions</span> <span class="cls-field-type">TriggerOption[]</span></div>
+        <div class="cls-field"><span class="cls-field-name">configFields</span> <span class="cls-field-type">ConfigField[]</span></div>
+      </div>
+      <div class="cls-sub cls-sub-sense">Alignment Monitor</div>
+      <div class="cls-sub cls-sub-sense">Cross-Section Monitor</div>
+      <div class="cls-sub cls-sub-sense">Change Preview</div>
+      <div class="cls-sub cls-sub-builtin" style="border-radius:0 0 4px 4px;">community ...</div>
+    </div>
+
+    <!-- ═══ GATE ═══ -->
+    <div class="cls" id="clsGate" style="left:220px; top:30px; width:165px;">
+      <div class="cls-header" style="background:#fef9c3; color:#92400e;">
+        Gate
+      </div>
+      <div class="cls-body">
+        <div class="cls-field"><span class="cls-field-name">reads</span> <span class="cls-field-type">FunctionID[]</span></div>
+        <div class="cls-field"><span class="cls-field-name">rules</span> <span class="cls-field-type">GateRule[]</span></div>
+        <div class="cls-field"><span class="cls-field-name">defaultRoute</span> <span class="cls-field-type">string</span></div>
+      </div>
+    </div>
+
+    <!-- ═══ GATE RULE ═══ -->
+    <div class="cls" id="clsGateRule" style="left:220px; top:160px; width:165px;">
+      <div class="cls-header" style="font-size:11px;">
+        GateRule
+      </div>
+      <div class="cls-body">
+        <div class="cls-field"><span class="cls-field-name">when</span> <span class="cls-field-type">{ field, op, value }</span></div>
+        <div class="cls-field"><span class="cls-field-name">then</span> <span class="cls-field-type">NegotiateProtocolID</span></div>
+      </div>
+    </div>
+
+    <!-- ═══ NEGOTIATE PROTOCOL ═══ -->
+    <div class="cls" id="clsNeg" style="left:415px; top:30px; width:175px;">
+      <div class="cls-header" style="background:#ffe4e6; color:#be185d;">
+        NegotiateProtocol
+      </div>
+      <div class="cls-body">
+        <div class="cls-field"><span class="cls-field-name">id</span></div>
+        <div class="cls-field"><span class="cls-field-name">roles</span> <span class="cls-field-type">Role[]</span></div>
+        <div class="cls-field"><span class="cls-field-name">actions</span> <span class="cls-field-type">Action[]</span></div>
+        <div class="cls-field"><span class="cls-field-name">stages</span> <span class="cls-field-type">{ frame, delib, resolve }</span></div>
+        <div class="cls-field"><span class="cls-field-name">resolution</span> <span class="cls-field-type">ResolutionRule</span></div>
+        <div class="cls-field"><span class="cls-field-name">configFields</span> <span class="cls-field-type">ConfigField[]</span></div>
+      </div>
+      <div class="cls-sub cls-sub-neg">Quick Inform</div>
+      <div class="cls-sub cls-sub-neg">Ask for Input</div>
+      <div class="cls-sub cls-sub-neg">Team Vote</div>
+      <div class="cls-sub cls-sub-neg">Discussion</div>
+      <div class="cls-sub cls-sub-builtin" style="border-radius:0 0 4px 4px;">community ...</div>
+    </div>
+
+    <!-- ═══ ACTION ═══ -->
+    <div class="cls" id="clsAction" style="left:630px; top:30px; width:155px;">
+      <div class="cls-header" style="font-size:11px;">
+        Action
+      </div>
+      <div class="cls-body">
+        <div class="cls-field"><span class="cls-field-name">id</span></div>
+        <div class="cls-field"><span class="cls-field-name">effect</span> <span class="cls-field-type">approve | reject | ...</span></div>
+        <div class="cls-field"><span class="cls-field-name">availableTo</span> <span class="cls-field-type">RoleID[]</span></div>
+        <div class="cls-field"><span class="cls-field-name">steps</span> <span class="cls-field-type">Step[]</span></div>
+      </div>
+    </div>
+
+    <!-- ═══ STEP ═══ -->
+    <div class="cls" id="clsStep" style="left:630px; top:170px; width:155px;">
+      <div class="cls-header" style="font-size:11px;">
+        Step
+      </div>
+      <div class="cls-body">
+        <div class="cls-field"><span class="cls-field-name">type</span> <span class="cls-field-type">run-fn | show | ui</span></div>
+        <div class="cls-field"><span class="cls-field-name">functionId</span> <span class="cls-field-type">FunctionID?</span></div>
+        <div class="cls-field"><span class="cls-field-name">ui</span> <span class="cls-field-type">ViewPrimitive[]?</span></div>
+      </div>
+    </div>
+
+    <!-- ═══ FUNCTION ═══ -->
+    <div class="cls" id="clsFn" style="left:16px; top:300px; width:280px;">
+      <div class="cls-header">
+        Function
+        <span class="cls-header-sub">shared pool — referenced by all protocols</span>
+      </div>
+      <div class="cls-body">
+        <div class="cls-field"><span class="cls-field-name">id</span></div>
+        <div class="cls-field"><span class="cls-field-name">executor</span> <span class="cls-field-type">prompt | local | api</span></div>
+        <div class="cls-field"><span class="cls-field-name">input</span> <span class="cls-field-type">DocumentSnapshot (auto)</span></div>
+        <div class="cls-field"><span class="cls-field-name">output</span> <span class="cls-field-type">typed schema</span></div>
+        <div class="cls-field"><span class="cls-field-name">display</span> <span class="cls-field-type">DisplayBinding[]</span></div>
+        <div class="cls-field"><span class="cls-field-name">dependsOn</span> <span class="cls-field-type">FunctionID[]? (chaining)</span></div>
+      </div>
+    </div>
+
+    <!-- ═══ DISPLAY BINDING ═══ -->
+    <div class="cls" id="clsDisplay" style="left:330px; top:300px; width:180px;">
+      <div class="cls-header" style="font-size:11px;">
+        DisplayBinding
+      </div>
+      <div class="cls-body">
+        <div class="cls-field"><span class="cls-field-name">on</span> <span class="cls-field-type">IntentItem | Para | Panel</span></div>
+        <div class="cls-field"><span class="cls-field-name">capability</span> <span class="cls-field-type">ViewPrimitive type</span></div>
+        <div class="cls-field"><span class="cls-field-name">slots</span> <span class="cls-field-type">{ [slot]: template }</span></div>
+      </div>
+    </div>
+
+    <!-- ═══ FOUNDATION: DocumentSnapshot ═══ -->
+    <div class="cls" id="clsSnap" style="left:16px; top:460px; width:200px; border-color:#374151;">
+      <div class="cls-header" style="background:#e5e7eb;">
+        DocumentSnapshot
+        <span class="cls-header-sub">input to every function</span>
+      </div>
+      <div class="cls-body">
+        <div class="cls-field"><span class="cls-field-name">intentItems</span> <span class="cls-field-type">IntentItem[]</span></div>
+        <div class="cls-field"><span class="cls-field-name">dependencies</span> <span class="cls-field-type">Dependency[]</span></div>
+        <div class="cls-field"><span class="cls-field-name">sections</span> <span class="cls-field-type">Section[]</span></div>
+        <div class="cls-field"><span class="cls-field-name">proposals</span> <span class="cls-field-type">Proposal[]</span></div>
+        <div class="cls-field"><span class="cls-field-name">results</span> <span class="cls-field-type">FunctionResult[]</span></div>
+      </div>
+    </div>
+
+    <!-- ═══ FOUNDATION: FunctionResult ═══ -->
+    <div class="cls" id="clsResult" style="left:250px; top:460px; width:170px; border-color:#374151;">
+      <div class="cls-header" style="background:#e5e7eb; font-size:11px;">
+        FunctionResult
+        <span class="cls-header-sub">stored for chaining + Gate</span>
+      </div>
+      <div class="cls-body">
+        <div class="cls-field"><span class="cls-field-name">functionId</span></div>
+        <div class="cls-field"><span class="cls-field-name">output</span> <span class="cls-field-type">any</span></div>
+        <div class="cls-field"><span class="cls-field-name">timestamp</span></div>
+      </div>
+    </div>
+
+    <!-- ═══ FOUNDATION: ViewPrimitive ═══ -->
+    <div class="cls" id="clsView" style="left:455px; top:460px; width:180px; border-color:#374151;">
+      <div class="cls-header" style="background:#e5e7eb; font-size:11px;">
+        ViewPrimitive
+        <span class="cls-header-sub">rendering surface</span>
+      </div>
+      <div class="cls-body">
+        <div class="cls-field"><span class="cls-field-name">indicator</span> <span class="cls-field-type">on outline nodes</span></div>
+        <div class="cls-field"><span class="cls-field-name">highlight</span> <span class="cls-field-type">on writing text</span></div>
+        <div class="cls-field"><span class="cls-field-name">card</span> <span class="cls-field-type">in panel</span></div>
+        <div class="cls-field"><span class="cls-field-name">input, thread</span> <span class="cls-field-type">interaction</span></div>
+      </div>
+    </div>
+
+    <!-- ═══ FOUNDATION: Proposal ═══ -->
+    <div class="cls" id="clsProposal" style="left:670px; top:460px; width:160px; border-color:#374151;">
+      <div class="cls-header" style="background:#e5e7eb; font-size:11px;">
+        Proposal
+      </div>
+      <div class="cls-body">
+        <div class="cls-field"><span class="cls-field-name">status</span> <span class="cls-field-type">proposed | passed | failed</span></div>
+        <div class="cls-field"><span class="cls-field-name">changes</span> <span class="cls-field-type">DraftChange[]</span></div>
+        <div class="cls-field"><span class="cls-field-name">votes</span> <span class="cls-field-type">Vote[]</span></div>
+      </div>
+    </div>
+
+    <!-- ═══ SVG ARROWS ═══ -->
+    <svg class="arrows-svg" id="svg"></svg>
+
+  </div>
+
+  <div class="caption">
+    <strong>Figure N.</strong> The GroundingKit data model.
+    The <strong>Protocol Layer</strong> contains three registration types: SenseProtocol (bundles functions with triggers), Gate (reads function results and routes by conditions), and NegotiateProtocol (defines roles, actions with optional step sequences, deliberation stages, and resolution rules).
+    Colored items show built-in registrations; community developers register through the same API.
+    The <strong>Function Layer</strong> provides atomic capabilities that declare an executor, output schema, and display bindings — functions are shared across protocols and can chain by reading stored results.
+    The <strong>Foundation</strong> is platform-defined: DocumentSnapshot assembles the full coordination space state as input to every function; FunctionResult stores outputs for chaining and Gate evaluation; ViewPrimitive provides the rendering surface; Proposal tracks negotiation state.
+  </div>
+
+</div>
+
+<script>
+function draw() {
+  const svg = document.getElementById('svg');
+  const diagram = document.getElementById('diagram');
+  const dR = diagram.getBoundingClientRect();
+  const w = dR.width, h = dR.height;
+
+  function pos(id) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return {
+      left: r.left - dR.left, right: r.right - dR.left,
+      top: r.top - dR.top, bottom: r.bottom - dR.top,
+      cx: r.left + r.width/2 - dR.left, cy: r.top + r.height/2 - dR.top,
+    };
+  }
+
+  const sense = pos('clsSense'), gate = pos('clsGate'), gateRule = pos('clsGateRule');
+  const neg = pos('clsNeg'), action = pos('clsAction'), step = pos('clsStep');
+  const fn = pos('clsFn'), display = pos('clsDisplay');
+  const snap = pos('clsSnap'), result = pos('clsResult'), view = pos('clsView'), proposal = pos('clsProposal');
+
+  if (!sense || !fn) return;
+
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+
+  // Arrow helper
+  function arrow(x1, y1, x2, y2, label, color='#555', dash='') {
+    const mx = (x1+x2)/2, my = (y1+y2)/2;
+    return `
+      <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
+        stroke="${color}" stroke-width="1.4" ${dash ? `stroke-dasharray="${dash}"` : ''}
+        marker-end="url(#ah${color.replace('#','')})" />
+      ${label ? `<text x="${mx}" y="${my - 5}" text-anchor="middle" font-size="8.5" fill="${color}" font-weight="500" font-family="Helvetica Neue, Arial">${label}</text>` : ''}
+    `;
+  }
+
+  svg.innerHTML = `
+    <defs>
+      <marker id="ah555" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+        <path d="M0 0.5 L6 2.5 L0 4.5" fill="#555" stroke="none"/>
+      </marker>
+      <marker id="ah4f46e5" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+        <path d="M0 0.5 L6 2.5 L0 4.5" fill="#4f46e5" stroke="none"/>
+      </marker>
+      <marker id="ahbe185d" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+        <path d="M0 0.5 L6 2.5 L0 4.5" fill="#be185d" stroke="none"/>
+      </marker>
+      <marker id="ah999" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+        <path d="M0 0.5 L6 2.5 L0 4.5" fill="#999" stroke="none"/>
+      </marker>
+    </defs>
+
+    <!-- Sense.functions → Function -->
+    ${arrow(sense.cx, sense.bottom + 2, fn.cx - 40, fn.top - 2, 'functions', '#4f46e5', '5 3')}
+
+    <!-- Gate.reads → FunctionResult -->
+    ${arrow(gate.cx, gate.bottom + 2, result.cx, result.top - 2, 'reads', '#555', '5 3')}
+
+    <!-- Gate.rules → GateRule -->
+    <line x1="${gate.cx}" y1="${gate.bottom + 2}" x2="${gateRule.cx}" y2="${gateRule.top - 2}"
+      stroke="#555" stroke-width="1.4"/>
+
+    <!-- GateRule.then → NegotiateProtocol -->
+    <path d="M${gateRule.right + 2} ${gateRule.cy} L${neg.left - 2} ${neg.cy + 40}"
+      stroke="#555" stroke-width="1.2" stroke-dasharray="5 3" marker-end="url(#ah555)"/>
+    <text x="${(gateRule.right + neg.left)/2}" y="${gateRule.cy - 6}" font-size="8" fill="#999" text-anchor="middle">routes to</text>
+
+    <!-- Negotiate.actions → Action -->
+    <line x1="${neg.right + 2}" y1="${neg.cy - 10}" x2="${action.left - 2}" y2="${action.cy}"
+      stroke="#555" stroke-width="1.4" marker-end="url(#ah555)"/>
+    <text x="${(neg.right + action.left)/2}" y="${neg.cy - 18}" font-size="8" fill="#999" text-anchor="middle">actions</text>
+
+    <!-- Action.steps → Step -->
+    <line x1="${action.cx}" y1="${action.bottom + 2}" x2="${step.cx}" y2="${step.top - 2}"
+      stroke="#555" stroke-width="1.4" marker-end="url(#ah555)"/>
+
+    <!-- Step.functionId → Function -->
+    ${arrow(step.left - 2, step.cy, fn.right + 2, fn.cy, 'invokes', '#be185d', '5 3')}
+
+    <!-- Negotiate.stages → Step -->
+    <path d="M${neg.right + 2} ${neg.cy + 20} L${step.left - 2} ${step.cy - 10}"
+      stroke="#555" stroke-width="1.2" marker-end="url(#ah555)"/>
+    <text x="${neg.right + 14}" y="${neg.cy + 14}" font-size="8" fill="#999">stages</text>
+
+    <!-- Function.display → DisplayBinding -->
+    <line x1="${fn.right + 2}" y1="${fn.cy}" x2="${display.left - 2}" y2="${display.cy}"
+      stroke="#555" stroke-width="1.4" marker-end="url(#ah555)"/>
+    <text x="${(fn.right + display.left)/2}" y="${fn.cy - 6}" font-size="8" fill="#999" text-anchor="middle">display</text>
+
+    <!-- Function → DocumentSnapshot -->
+    ${arrow(fn.cx - 40, fn.bottom + 2, snap.cx, snap.top - 2, 'reads', '#999')}
+
+    <!-- Function → FunctionResult -->
+    ${arrow(fn.cx + 40, fn.bottom + 2, result.cx, result.top - 2, 'produces', '#999')}
+
+    <!-- DisplayBinding → ViewPrimitive -->
+    ${arrow(display.cx, display.bottom + 2, view.cx, view.top - 2, 'renders to', '#999')}
+
+    <!-- Negotiate → Proposal -->
+    <path d="M${neg.cx + 40} ${neg.bottom + 2} L${neg.cx + 40} ${neg.bottom + 20} L${proposal.cx} ${proposal.top - 2}"
+      stroke="#999" stroke-width="1.2" stroke-dasharray="5 3" marker-end="url(#ah999)"/>
+    <text x="${(neg.cx + 40 + proposal.cx)/2 + 20}" y="${neg.bottom + 16}" font-size="8" fill="#999">creates</text>
+  `;
+}
+
+window.addEventListener('load', draw);
+window.addEventListener('resize', draw);
+</script>
+
+</body>
+</html>

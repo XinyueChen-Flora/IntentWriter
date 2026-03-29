@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Function Registration</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #fff;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    padding: 40px 20px;
+  }
+  .figure { width: 680px; }
+  .arch { display: flex; flex-direction: column; gap: 10px; }
+
+  .section-bar {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+  }
+  .section-num {
+    width: 20px; height: 20px; border-radius: 50%;
+    background: #374151; color: #fff;
+    font-size: 10px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .section-title { font-size: 14px; font-weight: 800; color: #1f2937; }
+  .section-sub { font-size: 11px; color: #888; margin-left: 4px; }
+
+  /* ═══ Foundation ═══ */
+  .foundation {
+    border: 2px solid #374151; border-radius: 10px;
+    padding: 10px 12px; background: #f9fafb;
+  }
+
+  /* ── Data Snapshot ── */
+  .snapshot {
+    margin-bottom: 12px;
+  }
+  .snap-title {
+    font-size: 12px; font-weight: 700; color: #555;
+    letter-spacing: 0.04em;
+    margin-bottom: 5px;
+  }
+  .snap-grid {
+    display: flex; flex-wrap: wrap; gap: 6px;
+  }
+  .snap-item {
+    background: #fff;
+    border: 1.5px solid #d1d5db;
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 10px;
+  }
+  .snap-item-name {
+    font-weight: 700; color: #1f2937;
+    font-family: 'SF Mono', Monaco, monospace; font-size: 10.5px;
+  }
+  .snap-item-fields {
+    color: #888; margin-top: 1px; font-size: 10px;
+  }
+  .snap-note {
+    font-size: 9.5px; color: #999; margin-top: 6px; font-style: italic; line-height: 1.5;
+  }
+
+  /* ── UI Views with Tags ── */
+  .views-row {
+    display: flex; gap: 8px;
+    margin-bottom: 8px;
+  }
+  .view-box {
+    flex: 1; background: #fff;
+    border: 1.5px solid #d1d5db; border-radius: 8px; overflow: hidden;
+  }
+  .view-header {
+    padding: 4px 8px; background: #f3f4f6;
+    font-size: 11px; font-weight: 700; color: #374151;
+    border-bottom: 1px solid #e5e7eb;
+  }
+  .view-body { padding: 6px 8px; position: relative; }
+
+  /* Tags on views */
+  .ui-tag {
+    display: inline-flex; align-items: center; gap: 3px;
+    font-size: 9px; font-weight: 700; color: #fff;
+    padding: 2px 7px; border-radius: 3px;
+    font-family: 'SF Mono', Monaco, monospace;
+  }
+  .tag-indicator { background: #6366f1; }
+  .tag-highlight { background: #0891b2; }
+  .tag-card { background: #d97706; }
+  .tag-input { background: #059669; }
+  .tag-expandable { background: #8b5cf6; }
+
+  .ol-item {
+    display: flex; align-items: center; gap: 6px;
+    padding: 2px 0; font-size: 11px; color: #374151;
+  }
+  .ol-dep { font-size: 8px; color: #bbb; margin-left: auto; }
+  .wr-line { height: 4px; border-radius: 2px; background: #e5e7eb; margin-bottom: 4px; }
+
+  .view-tags {
+    margin-top: 6px; padding-top: 6px;
+    border-top: 1px dashed #e5e7eb;
+    display: flex; flex-wrap: wrap; gap: 4px;
+  }
+
+  /* ═══ Functions ═══ */
+  .fn-pair { display: flex; gap: 10px; }
+  .fn-card {
+    flex: 1; border: 2px solid #374151; border-radius: 8px; overflow: hidden;
+  }
+  .fn-card-header {
+    padding: 5px 10px; background: #f3f4f6;
+    font-size: 12px; font-weight: 800; color: #1f2937;
+    border-bottom: 1.5px solid #e5e7eb;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .fn-tag-prompt { font-size:7px; font-weight:700; padding:2px 5px; border-radius:3px; background:#ede9fe; color:#6366f1; text-transform:uppercase; }
+  .fn-tag-local { font-size:7px; font-weight:700; padding:2px 5px; border-radius:3px; background:#dcfce7; color:#16a34a; text-transform:uppercase; }
+
+  .fn-body { padding: 8px 10px; }
+  .fn-step {
+    margin-bottom: 6px; padding-bottom: 6px;
+    border-bottom: 1px solid #f3f4f6;
+  }
+  .fn-step:last-child { border-bottom:none; margin-bottom:0; padding-bottom:0; }
+  .fn-step-label {
+    font-size: 10px; font-weight: 700; color: #999;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    margin-bottom: 2px;
+  }
+  .fn-step-content {
+    font-size: 10px; color: #374151; line-height: 1.5;
+  }
+  .fn-step-content code {
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 9px; background: #f3f4f6;
+    padding: 1px 4px; border-radius: 2px;
+  }
+  .fn-step-content .note { color: #888; font-size: 9px; }
+
+  /* ═══ Result ═══ */
+  .result-pair { display: flex; gap: 14px; }
+  .result-card {
+    flex: 1; border: 2px solid #374151; border-radius: 8px; overflow: hidden;
+  }
+  .result-header {
+    padding: 5px 10px; background: #1f2937; color: #fff;
+    font-size: 10px; font-weight: 700;
+  }
+  .result-body { padding: 10px 12px; }
+
+  .res-label {
+    font-size: 8px; font-weight: 700; color: #999;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    margin-bottom: 4px; margin-top: 8px;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .res-label:first-child { margin-top: 0; }
+
+  .res-ol-item {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 0; font-size: 9.5px; color: #374151;
+  }
+  .res-ind {
+    width: 28px; height: 14px; border-radius: 3px;
+    font-size: 8px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .ind-g { background: #dcfce7; color: #16a34a; }
+  .ind-w { background: #fef3c7; color: #d97706; }
+  .ind-b { background: #fee2e2; color: #dc2626; }
+
+  .res-wr { display: flex; flex-direction: column; gap: 3px; }
+  .res-wr-line { height: 4px; border-radius: 2px; }
+  .res-wr-n { background: #e5e7eb; }
+  .res-wr-purple { background: #c4b5fd; }
+  .res-wr-yellow { background: #fbbf24; }
+
+  .res-panel-card {
+    border: 1.2px solid #e5e7eb; border-radius: 4px; padding: 6px 8px;
+  }
+  .res-card-title { font-size: 9px; font-weight: 700; color: #374151; margin-bottom: 2px; }
+  .res-card-body { font-size: 8.5px; color: #888; line-height: 1.5; }
+
+  .section-arrow {
+    display: flex; align-items: center; justify-content: center;
+    color: #999; font-size: 11px;
+  }
+
+  .caption {
+    margin-top: 12px; font-size: 11px; color: #374151;
+    line-height: 1.6; font-family: 'Times New Roman', Georgia, serif;
+  }
+  .caption strong { font-weight: 700; }
+</style>
+</head>
+<body>
+
+<div class="figure">
+  <div class="arch">
+
+    <!-- ═══ 1. FOUNDATION ═══ -->
+    <div>
+      <div class="section-bar">
+        <div class="section-num">1</div>
+        <div class="section-title">Foundation</div>
+        <div class="section-sub">— data snapshot + UI surface</div>
+      </div>
+
+      <div class="foundation">
+
+        <!-- Data Snapshot -->
+        <div class="snapshot">
+          <div class="snap-title">DocumentSnapshot — all data available to every function</div>
+          <div class="snap-grid">
+            <div class="snap-item">
+              <div class="snap-item-name">bnaUnits[]</div>
+              <div class="snap-item-fields">id · content · owner · position</div>
+            </div>
+            <div class="snap-item">
+              <div class="snap-item-name">dependencies[]</div>
+              <div class="snap-item-fields">type · source → target</div>
+            </div>
+            <div class="snap-item">
+              <div class="snap-item-name">sections[]</div>
+              <div class="snap-item-fields">unitId · assignee · paragraphs[]</div>
+            </div>
+            <div class="snap-item">
+              <div class="snap-item-name">interactionHistory[]</div>
+              <div class="snap-item-fields">proposals · decisions · prior function outputs (chaining)</div>
+            </div>
+          </div>
+          <div class="snap-note">BNA-agnostic: bnaUnits and dependencies are abstract — currently outline nodes, but the same interface supports other BNA forms.</div>
+        </div>
+
+        <!-- Views -->
+        <div class="views-row">
+          <div class="view-box" style="flex:1.2;">
+            <div class="view-header">Outline</div>
+            <div class="view-body">
+              <div class="ol-item">§1 Introduction</div>
+              <div class="ol-item">§2 Method <div class="ol-dep">depends-on §1</div></div>
+              <div class="ol-item">§3 Evaluation <div class="ol-dep">consistent-w/ §2</div></div>
+            </div>
+          </div>
+          <div class="view-box" style="flex:2;">
+            <div class="view-header">Writing <span style="font-weight:400; color:#999; font-size:8px;">+ Panel can attach anywhere here</span></div>
+            <div class="view-body">
+              <div class="wr-line" style="width:90%"></div>
+              <div class="wr-line" style="width:85%"></div>
+              <div class="wr-line" style="width:75%"></div>
+              <div class="wr-line" style="width:80%"></div>
+              <div class="wr-line" style="width:65%"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- UI primitives as text -->
+        <div style="margin-top: 8px; padding-top: 8px; border-top: 1.5px solid #e5e7eb;">
+          <div class="snap-title">UI Primitives — renderable components, injectable into any view</div>
+          <div style="font-size: 11px; color: #374151; line-height: 1.8;">
+            <span class="ui-tag tag-indicator">indicator</span> icon or value beside a BNA unit <span style="color:#bbb;">→</span> on <span style="font-weight:700;">Outline</span>
+            &nbsp;&nbsp;·&nbsp;&nbsp;
+            <span class="ui-tag tag-highlight">highlight</span> colored range over text <span style="color:#bbb;">→</span> on <span style="font-weight:700;">Writing</span>
+            &nbsp;&nbsp;·&nbsp;&nbsp;
+            <span class="ui-tag tag-card">card</span> structured content block <span style="color:#bbb;">→</span> on <span style="font-weight:700;">Panel</span>
+            <br/>
+            <span class="ui-tag tag-expandable">expandable</span> collapsible area below a unit <span style="color:#bbb;">→</span> on <span style="font-weight:700;">Outline</span>
+            &nbsp;&nbsp;·&nbsp;&nbsp;
+            <span class="ui-tag tag-input">input</span> text field for responses <span style="color:#bbb;">→</span> on <span style="font-weight:700;">Panel</span>
+            &nbsp;&nbsp;·&nbsp;&nbsp;
+            <span style="color:#bbb;">thread, progress, banner ...</span>
+          </div>
+          <div class="snap-note">Views (<strong style="color:#555;">Outline</strong>, <strong style="color:#555;">Writing</strong>, <strong style="color:#555;">Panel</strong>) are carriers. Primitives are injected into them by function declarations. The same primitive can target different views.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-arrow">↓ developer registers functions: reads snapshot, renders to tagged slots ↓</div>
+
+    <!-- ═══ 2. FUNCTIONS ═══ -->
+    <div>
+      <div class="section-bar">
+        <div class="section-num">2</div>
+        <div class="section-title">Two functions</div>
+        <div class="section-sub">— registered independently</div>
+      </div>
+
+      <div class="fn-pair">
+
+        <div class="fn-card">
+          <div class="fn-card-header">
+            <span class="fn-tag-prompt">executor: prompt</span>
+            check-drift
+          </div>
+          <div class="fn-body">
+            <div class="fn-step">
+              <div class="fn-step-label">Reads</div>
+              <div class="fn-step-content">
+                <code>bnaUnits[]</code> + <code>sections[]</code>
+              </div>
+            </div>
+            <div class="fn-step">
+              <div class="fn-step-label">Executor</div>
+              <div class="fn-step-content" style="background:#f8f7ff; border-radius:4px; padding:6px 8px; font-family:'SF Mono',Monaco,monospace; font-size:8.5px; line-height:1.6; color:#374151;">
+                <span style="color:#6366f1; font-weight:600;">system:</span> "For each BNA unit and its<br/>
+                &nbsp;&nbsp;bound writing section, assess how<br/>
+                &nbsp;&nbsp;much of the intent is covered."<br/>
+                <span style="color:#6366f1; font-weight:600;">user:</span> "{{bnaUnits}}\n{{sections}}"
+              </div>
+            </div>
+            <div class="fn-step">
+              <div class="fn-step-label">Output</div>
+              <div class="fn-step-content">
+                <code>coverage: 72%</code> · <code>sentences: [{range, alignment}]</code>
+              </div>
+            </div>
+            <div class="fn-step">
+              <div class="fn-step-label">Display</div>
+              <div class="fn-step-content">
+                <span class="ui-tag tag-indicator">indicator</span> on <strong>Outline</strong> → coverage %<br/>
+                <span class="ui-tag tag-highlight">highlight</span> on <strong>Writing</strong> → aligned sentences
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="fn-card">
+          <div class="fn-card-header">
+            <span class="fn-tag-local">executor: local</span>
+            check-terms
+          </div>
+          <div class="fn-body">
+            <div class="fn-step">
+              <div class="fn-step-label">Reads</div>
+              <div class="fn-step-content">
+                <code>sections[]</code> — full text across all sections
+              </div>
+            </div>
+            <div class="fn-step">
+              <div class="fn-step-label">Executor</div>
+              <div class="fn-step-content" style="background:#f0fdf4; border-radius:4px; padding:6px 8px; font-family:'SF Mono',Monaco,monospace; font-size:8.5px; line-height:1.6; color:#374151;">
+                <span style="color:#16a34a; font-weight:600;">run:</span> (snapshot) => {<br/>
+                &nbsp;&nbsp;<span style="color:#888;">// extract terms from all sections</span><br/>
+                &nbsp;&nbsp;const terms = extractTerms(snapshot);<br/>
+                &nbsp;&nbsp;<span style="color:#888;">// find cross-section inconsistencies</span><br/>
+                &nbsp;&nbsp;return { mismatches, glossary };<br/>
+                }
+              </div>
+            </div>
+            <div class="fn-step">
+              <div class="fn-step-label">Output</div>
+              <div class="fn-step-content">
+                <code>mismatches: [{term, locations}]</code> · <code>glossary: [{term, consistent}]</code>
+              </div>
+            </div>
+            <div class="fn-step">
+              <div class="fn-step-label">Display</div>
+              <div class="fn-step-content">
+                <span class="ui-tag tag-highlight">highlight</span> on <strong>Writing</strong> → inconsistent terms<br/>
+                <span class="ui-tag tag-card">card</span> on <strong>Panel</strong> → term glossary
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="section-arrow">↓ runtime executes, resolves display bindings, fills tagged slots ↓</div>
+
+    <!-- ═══ 3. RESULT ═══ -->
+    <div>
+      <div class="section-bar">
+        <div class="section-num">3</div>
+        <div class="section-title">After registration</div>
+        <div class="section-sub">— functions fill the views with their output</div>
+      </div>
+
+      <div style="font-size:11px; color:#555; line-height:1.5; margin-bottom:10px;">
+        <strong>check-drift</strong> adds coverage <span class="ui-tag tag-indicator">indicator</span> to each outline node and <span class="ui-tag tag-highlight">highlight</span> on aligned sentences in writing.
+        <strong>check-terms</strong> adds <span class="ui-tag tag-highlight">highlight</span> on inconsistent terms in writing and a <span class="ui-tag tag-card">card</span> with the term glossary in the panel.
+      </div>
+
+      <div class="fn-pair">
+
+        <!-- check-drift result -->
+        <div style="flex:1; border:2px solid #374151; border-radius:8px; overflow:hidden;">
+          <div style="padding:5px 10px; background:#f3f4f6; font-size:10px; font-weight:700; color:#1f2937; border-bottom:1.5px solid #e5e7eb;">check-drift →</div>
+          <div style="display:flex; gap:0;">
+            <div style="flex:1.2; padding:8px 10px; border-right:1px solid #eee;">
+              <div style="font-size:8px; font-weight:700; color:#999; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px;">Outline</div>
+              <div class="res-ol-item"><div class="res-ind ind-g">92%</div> §1 Introduction</div>
+              <div class="res-ol-item"><div class="res-ind ind-w">72%</div> §2 Method</div>
+              <div class="res-ol-item"><div class="res-ind ind-b">31%</div> §3 Evaluation</div>
+            </div>
+            <div style="flex:2; padding:8px 10px;">
+              <div style="font-size:8px; font-weight:700; color:#999; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px;">Writing</div>
+              <div class="res-wr">
+                <div class="res-wr-line res-wr-n" style="width:90%"></div>
+                <div class="res-wr-line res-wr-purple" style="width:85%"></div>
+                <div class="res-wr-line res-wr-purple" style="width:75%"></div>
+                <div class="res-wr-line res-wr-n" style="width:80%"></div>
+                <div class="res-wr-line res-wr-n" style="width:65%"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- check-terms result -->
+        <div style="flex:1; border:2px solid #374151; border-radius:8px; overflow:hidden;">
+          <div style="padding:5px 10px; background:#f3f4f6; font-size:10px; font-weight:700; color:#1f2937; border-bottom:1.5px solid #e5e7eb;">check-terms →</div>
+          <div style="display:flex; gap:0;">
+            <div style="flex:1.2; padding:8px 10px; border-right:1px solid #eee;">
+              <div style="font-size:8px; font-weight:700; color:#999; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px;">Outline</div>
+              <div class="ol-item" style="font-size:9.5px;">§1 Introduction</div>
+              <div class="ol-item" style="font-size:9.5px;">§2 Method</div>
+              <div class="ol-item" style="font-size:9.5px;">§3 Evaluation</div>
+            </div>
+            <div style="flex:2; padding:8px 10px;">
+              <div style="font-size:8px; font-weight:700; color:#999; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px;">Writing</div>
+              <div class="res-wr">
+                <div class="res-wr-line res-wr-n" style="width:90%"></div>
+                <div class="res-wr-line res-wr-n" style="width:85%"></div>
+                <div class="res-wr-line res-wr-yellow" style="width:40%"></div>
+                <div class="res-wr-line res-wr-n" style="width:80%"></div>
+                <div class="res-wr-line res-wr-n" style="width:65%"></div>
+              </div>
+              <div class="res-panel-card" style="margin-top:6px;">
+                <div class="res-card-title" style="display:flex; align-items:center; gap:4px;">
+                  <span class="ui-tag tag-card" style="font-size:6.5px;">card</span>
+                  Term Glossary
+                </div>
+                <div class="res-card-body">
+                  "user study" <span style="color:#16a34a;">✓</span> &nbsp;
+                  "participants" <span style="color:#dc2626;">✗ "subjects"</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <div class="caption">
+    <strong>Figure N.</strong> Function registration end-to-end.
+    <strong>①</strong> The foundation exposes two interfaces: a <em>DocumentSnapshot</em> containing the complete coordination space state (BNA units, dependencies, writing sections, interaction history, prior function results), and a <em>UI surface</em> with tagged primitive slots across three views (outline: indicator, expandable; writing: highlight, side-note; panel: card, input).
+    <strong>②</strong> Two functions registered independently: <em>check-drift</em> (AI prompt) reads BNA units and writing sections, outputs coverage and sentence alignments, and declares rendering to <span style="color:#6366f1;">indicator</span> and <span style="color:#0891b2;">highlight</span>; <em>check-terms</em> (local JS) reads writing sections, outputs term mismatches, and declares rendering to <span style="color:#0891b2;">highlight</span> and <span style="color:#d97706;">card</span>.
+    <strong>③</strong> After registration, each function's output fills its declared UI slots — the same tag system connects function declarations to rendered views.
+  </div>
+</div>
+
+</body>
+</html>

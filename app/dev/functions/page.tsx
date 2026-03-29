@@ -108,7 +108,7 @@ function SpecTab() {
         </ol>
         <p className="mt-3">
           Functions do not declare <em>when</em> they run or <em>who</em> invokes them — that is
-          defined by <Link href="/dev/awareness" className="text-primary underline">Sense</Link> and <Link href="/dev/coordination" className="text-primary underline">Negotiate</Link> protocols
+          defined by <Link href="/dev/sense" className="text-primary underline">Sense</Link> and <Link href="/dev/coordination" className="text-primary underline">Negotiate</Link> protocols
           that reference them.
         </p>
       </Section>

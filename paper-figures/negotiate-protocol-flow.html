@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Negotiate Protocol</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #fff;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    padding: 40px 20px;
+  }
+  .figure { width: 860px; }
+
+  /* ═══ Main two-column ═══ */
+  .main {
+    display: flex;
+    gap: 0;
+    border: 2px solid #374151;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  /* ═══ Left: Declaration ═══ */
+  .left {
+    width: 300px; flex-shrink: 0;
+    border-right: 1.5px solid #e5e7eb;
+    display: flex; flex-direction: column;
+  }
+  .left-header {
+    padding: 7px 12px; background: #f3f4f6;
+    font-size: 12px; font-weight: 800; color: #1f2937;
+    border-bottom: 1.5px solid #e5e7eb;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .left-tag {
+    font-size: 8px; font-weight: 700; padding: 2px 6px;
+    border-radius: 3px; text-transform: uppercase;
+    background: #ffe4e6; color: #be185d;
+  }
+  .left-code {
+    flex: 1; padding: 10px 12px;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 10px; color: #374151; line-height: 1.65;
+    background: #fafafa; white-space: pre; overflow-x: auto;
+  }
+  .kw { color: #6366f1; font-weight: 600; }
+  .str { color: #059669; }
+  .fld { color: #b45309; }
+  .cmt { color: #9ca3af; }
+
+  /* ═══ Right: Runtime ═══ */
+  .right {
+    flex: 1; display: flex; flex-direction: column;
+  }
+  .right-header {
+    padding: 7px 12px; background: #f3f4f6;
+    font-size: 12px; font-weight: 800; color: #1f2937;
+    border-bottom: 1.5px solid #e5e7eb;
+  }
+  .right-sub { font-weight: 400; color: #888; font-size: 9px; margin-left: 4px; }
+
+  /* ═══ Stage card ═══ */
+  .stage {
+    padding: 8px 10px;
+    border-bottom: 1.5px solid #f0f0f2;
+  }
+  .stage:last-child { border-bottom: none; }
+
+  .stage-header {
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 6px;
+  }
+  .stage-tag {
+    font-size: 8px; font-weight: 700; color: #be185d;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 2px 6px; background: #ffe4e6; border-radius: 3px;
+  }
+  .stage-who {
+    font-size: 9px; color: #888;
+  }
+  .stage-question {
+    font-size: 10px; color: #1f2937; font-weight: 600;
+  }
+
+  /* Mini views */
+  .stage-views {
+    display: flex; gap: 6px; margin-bottom: 4px;
+  }
+  .mini-view {
+    flex: 1; border: 1.2px solid #d1d5db; border-radius: 6px; overflow: hidden;
+  }
+  .mv-header {
+    padding: 2px 6px; background: #f3f4f6;
+    font-size: 8.5px; font-weight: 700; color: #374151;
+    border-bottom: 1px solid #e5e7eb;
+  }
+  .mv-body { padding: 4px 6px; }
+
+  .mv-ol-item {
+    display: flex; align-items: center; gap: 4px;
+    padding: 1.5px 0; font-size: 9px; color: #374151;
+  }
+  .mv-ind {
+    width: 20px; height: 10px; border-radius: 2px;
+    font-size: 6.5px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .mv-ok { background: #dcfce7; color: #16a34a; }
+  .mv-warn { background: #fef3c7; color: #d97706; }
+  .mv-bad { background: #fee2e2; color: #dc2626; }
+  .mv-proposed { background: #ede9fe; color: #6366f1; }
+
+  .mv-wr-line { height: 2.5px; border-radius: 1px; margin-bottom: 2px; }
+  .mv-wr-n { background: #e5e7eb; }
+  .mv-wr-conflict { background: #fca5a5; }
+
+  .mv-proposal {
+    padding: 4px 6px; border: 1px solid #c4b5fd;
+    border-radius: 3px; background: #faf5ff;
+    font-size: 8.5px; color: #374151; line-height: 1.4;
+  }
+  .mv-proposal-title { font-weight: 700; color: #5b21b6; margin-bottom: 1px; }
+
+  .mv-diff {
+    margin-top: 3px; padding: 3px 6px;
+    border: 1px solid #e5e7eb; border-radius: 3px;
+    font-size: 8px; background: #fff; line-height: 1.4;
+  }
+  .d-del { color: #dc2626; text-decoration: line-through; }
+  .d-add { color: #16a34a; }
+
+  .mv-vote {
+    margin-top: 3px; padding: 3px 6px;
+    border: 1px solid #e5e7eb; border-radius: 3px; background: #fff;
+  }
+  .vote-bar-bg { height: 6px; background: #f3f4f6; border-radius: 3px; overflow: hidden; margin-bottom: 2px; }
+  .vote-bar-fill { height: 100%; border-radius: 3px; }
+  .vote-approve { background: #86efac; }
+  .vote-reject { background: #fca5a5; }
+  .vote-label { font-size: 7.5px; color: #888; }
+
+  .mv-banner {
+    padding: 3px 6px; border-radius: 3px;
+    font-size: 8.5px; font-weight: 600; margin-top: 3px;
+  }
+  .banner-success { background: #dcfce7; border: 1px solid #86efac; color: #166534; }
+  .banner-info { background: #ede9fe; border: 1px solid #c4b5fd; color: #5b21b6; }
+
+  .mv-vote-item {
+    font-size: 7.5px; color: #374151; padding: 1px 0;
+  }
+
+  /* Actions */
+  .stage-actions {
+    display: flex; gap: 4px; margin-top: 4px;
+  }
+  .act-btn {
+    padding: 2px 8px; border-radius: 3px;
+    font-size: 8.5px; font-weight: 600; border: 1px solid;
+  }
+  .act-approve { background: #f0fdf4; border-color: #86efac; color: #16a34a; }
+  .act-reject { background: #fff5f5; border-color: #fecaca; color: #dc2626; }
+  .act-counter { background: #f5f3ff; border-color: #c4b5fd; color: #6366f1; }
+
+  /* Chain note */
+  .chain-note {
+    padding: 2px 10px;
+    font-size: 7.5px; color: #bbb; font-style: italic;
+    border-bottom: 1.5px solid #f0f0f2;
+    text-align: center;
+  }
+
+  /* ═══ Caption ═══ */
+  .caption {
+    margin-top: 12px; font-size: 10.5px; color: #374151;
+    line-height: 1.6; font-family: 'Times New Roman', Georgia, serif;
+  }
+  .caption strong { font-weight: 700; }
+</style>
+</head>
+<body>
+
+<div class="figure">
+
+  <div class="main">
+
+    <!-- ═══ LEFT: Declaration ═══ -->
+    <div class="left">
+      <div class="left-header">
+        <span class="left-tag">Negotiate Protocol</span>
+        "Team Vote"
+      </div>
+      <div class="left-code"><span class="cmt">// Team votes on changes.</span>
+<span class="kw">registerNegotiateProtocol</span>({
+  <span class="fld">propose</span>: {
+    <span class="fld">who</span>: <span class="str">'proposer'</span>,
+    <span class="fld">steps</span>: [
+      { <span class="fld">run</span>: <span class="str">'frame-proposal'</span> },
+    ],
+  },
+  <span class="fld">deliberate</span>: {
+    <span class="fld">who</span>: <span class="str">'{{config.voters}}'</span>,
+    <span class="fld">steps</span>: [
+      { <span class="fld">show</span>: <span class="str">'frame-proposal'</span> },
+      { <span class="fld">run</span>: <span class="str">'preview-writing-impact'</span> },
+    ],
+    <span class="fld">actions</span>: [
+      <span class="str">'approve'</span>,
+      <span class="str">'reject'</span>,
+      <span class="str">'counter-propose'</span>,
+    ],
+  },
+  <span class="fld">resolve</span>: {
+    <span class="fld">rule</span>: <span class="str">'{{config.resolution}}'</span>,
+    <span class="fld">deadline</span>: <span class="str">'{{config.deadline}}'</span>,
+    <span class="fld">then</span>: <span class="str">'update-bna'</span>,
+  },
+
+  <span class="fld">config</span>: {
+    <span class="fld">voters</span>: [
+      <span class="str">'impacted-owners'</span>,
+      <span class="str">'all-members'</span>],
+    <span class="fld">resolution</span>: [
+      <span class="str">'majority'</span>,
+      <span class="str">'unanimous'</span>,
+      <span class="str">'single-approval'</span>],
+    <span class="fld">deadline</span>: <span class="str">'duration'</span>,
+  },
+})</div>
+    </div>
+
+    <!-- ═══ RIGHT: Runtime ═══ -->
+    <div class="right">
+      <div class="right-header">Runtime <span class="right-sub">proposer submits → voters review</span></div>
+
+      <!-- Propose -->
+      <div class="stage">
+        <div class="stage-header">
+          <span class="stage-tag">Propose</span>
+          <span class="stage-who">proposer</span>
+          <span class="stage-question">— presents the change</span>
+        </div>
+        <div class="stage-views">
+          <div class="mini-view">
+            <div class="mv-header">Outline</div>
+            <div class="mv-body">
+              <div class="mv-ol-item"><div class="mv-ind mv-ok">✓</div> §1</div>
+              <div class="mv-ol-item"><div class="mv-ind mv-proposed">△</div> §2 <span style="font-size:7px; color:#6366f1; margin-left:auto;">proposed</span></div>
+              <div class="mv-ol-item"><div class="mv-ind mv-bad">!</div> §3 <span style="font-size:7px; color:#dc2626; margin-left:auto;">affected</span></div>
+            </div>
+          </div>
+          <div class="mini-view" style="flex:1.5;">
+            <div class="mv-header">Panel</div>
+            <div class="mv-body">
+              <div class="mv-proposal">
+                <div class="mv-proposal-title">Proposed change to §2</div>
+                Revised approach to reflect updated findings<br/>
+                <span style="color:#888; font-size:7.5px;">Impact: §3 significant · §4 minor</span>
+              </div>
+              <div class="mv-banner banner-info" style="margin-top:3px; font-size:8px;">
+                "The original method no longer matches our data"
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chain-note">→ submitted to impacted owners (§3, §4)</div>
+
+      <!-- Deliberate -->
+      <div class="stage">
+        <div class="stage-header">
+          <span class="stage-tag">Deliberate</span>
+          <span class="stage-who">voter (§3 owner)</span>
+          <span class="stage-question">— reviews impact on their section</span>
+        </div>
+        <div class="stage-views">
+          <div class="mini-view">
+            <div class="mv-header">Outline</div>
+            <div class="mv-body">
+              <div class="mv-ol-item"><div class="mv-ind mv-proposed">△</div> §2 <span style="font-size:7px; color:#6366f1; margin-left:auto;">proposed</span></div>
+              <div class="mv-ol-item"><div class="mv-ind mv-bad">!</div> §3 <span style="font-size:7px; color:#dc2626; margin-left:auto;">your section</span></div>
+            </div>
+          </div>
+          <div class="mini-view" style="flex:1.5;">
+            <div class="mv-header">Writing (§3 — your section)</div>
+            <div class="mv-body">
+              <div class="mv-wr-line mv-wr-n" style="width:90%"></div>
+              <div class="mv-wr-line mv-wr-conflict" style="width:70%"></div>
+              <div class="mv-wr-line mv-wr-n" style="width:55%"></div>
+              <div class="mv-diff">
+                <span class="d-del">based on the original method</span><br/>
+                <span class="d-add">reflecting the revised approach</span>
+              </div>
+              <div class="mv-vote">
+                <div class="vote-bar-bg"><div class="vote-bar-fill vote-approve" style="width:33%;"></div></div>
+                <div class="vote-label">1/3 approved · 47h remaining</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="stage-actions">
+          <span class="act-btn act-approve">Approve</span>
+          <span class="act-btn act-reject">Reject</span>
+          <span class="act-btn act-counter">Counter-propose</span>
+        </div>
+      </div>
+
+      <div class="chain-note">↓ majority reached (2/3 approved)</div>
+
+      <!-- Resolve -->
+      <div class="stage">
+        <div class="stage-header">
+          <span class="stage-tag">Resolve</span>
+          <span class="stage-question">— majority reached, BNA updates</span>
+        </div>
+        <div class="stage-views">
+          <div class="mini-view">
+            <div class="mv-header">Outline (updated)</div>
+            <div class="mv-body">
+              <div class="mv-ol-item"><div class="mv-ind mv-ok">✓</div> §1</div>
+              <div class="mv-ol-item"><div class="mv-ind mv-ok">✓</div> §2 <span style="font-size:7px; color:#16a34a; margin-left:auto;">updated</span></div>
+              <div class="mv-ol-item"><div class="mv-ind mv-warn">→</div> §3 <span style="font-size:7px; color:#d97706; margin-left:auto;">needs revision</span></div>
+            </div>
+          </div>
+          <div class="mini-view" style="flex:1.5;">
+            <div class="mv-header">Panel</div>
+            <div class="mv-body">
+              <div class="mv-banner banner-success">✓ Approved (2/3) — §2 updated</div>
+              <div class="mv-vote" style="margin-top:3px;">
+                <div class="mv-vote-item">✓ Alice (§3) — approved</div>
+                <div class="mv-vote-item">✓ Carol (§4) — approved</div>
+                <div class="mv-vote-item">✗ Bob (§1) — rejected</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="padding:3px 0; font-size:8.5px; color:#888; font-style:italic;">
+          → BNA updated · all notified · new sense cycle begins
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="caption">
+    <strong>Figure N.</strong> A negotiate protocol: declaration (left) and stage-by-stage runtime (right).
+    <strong>Propose:</strong> the proposer runs <em>frame-proposal</em> to structure the change with context and reasoning.
+    <strong>Deliberate:</strong> each voter sees the framed proposal and a preview of how their own writing would change (rendered by <em>preview-writing-impact</em>); voters approve, reject, or counter-propose.
+    <strong>Resolve:</strong> when the team-configured resolution rule is met (here, majority), the BNA updates and the pipeline cycles back to Sense.
+    Teams configure who votes, what resolution rule to use, and the deadline.
+  </div>
+</div>
+
+</body>
+</html>

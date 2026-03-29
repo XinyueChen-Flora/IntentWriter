@@ -29,6 +29,16 @@ export type IntentBlock = {
   assigneeName?: string;
   assigneeEmail?: string;
   mergeWritingFrom?: string;
+  // Proposal state (set by apply-proposal mutations)
+  changeStatus?: string;       // 'proposed' | 'modified' | 'added' | 'removed'
+  changeBy?: string;
+  changeByName?: string;
+  changeAt?: number;
+  changeReasoning?: string;
+  previousContent?: string;
+  proposalId?: string;
+  proposedAction?: string;     // 'add' | 'modify' | 'remove'
+  proposeType?: string;        // 'decided' | 'discussion' | 'negotiate'
 };
 
 export type RoomMeta = {

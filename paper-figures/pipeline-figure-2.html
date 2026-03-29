@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coordination Pipeline</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #fff;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    padding: 40px 20px;
+  }
+  .figure { width: 680px; position: relative; }
+
+  .top-label { text-align: center; margin-bottom: 10px; }
+  .top-label-title {
+    font-size: 13px; font-weight: 700; color: #444;
+    letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .top-label-sub { font-size: 10.5px; color: #777; margin-left: 6px; }
+
+  /* ═══ Main container ═══ */
+  .main { position: relative; padding-bottom: 50px; }
+
+  /* ═══ Zones ═══ */
+  .zones { display: flex; position: relative; z-index: 2; }
+  .zone { position: relative; padding: 16px 12px 14px; }
+  .zone-label {
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; margin-bottom: 14px;
+  }
+
+  .zone-personal {
+    flex: 4; background: #f8f9fb;
+    border: 1.5px solid #e5e7eb; border-radius: 10px 0 0 10px;
+  }
+  .zone-personal .zone-label { color: #555; }
+
+  .zone-gate {
+    width: 140px; flex-shrink: 0; background: #fefcf5;
+    border-top: 1.5px solid #e5e7eb; border-bottom: 1.5px solid #e5e7eb;
+    border-left: 2px dashed #c9a940; border-right: 2px dashed #c9a940;
+    display: flex; flex-direction: column;
+  }
+  .zone-gate .zone-label { color: #92700c; text-align: center; }
+
+  .zone-team {
+    flex: 4; background: #faf8fb;
+    border: 1.5px solid #e5e7eb; border-radius: 0 10px 10px 0;
+  }
+  .zone-team .zone-label { color: #555; text-align: right; }
+
+  /* ═══ Stage boxes ═══ */
+  .stage-box {
+    background: #fff; border: 1.5px solid #c5c7cc; border-radius: 8px;
+    padding: 10px 12px 10px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+  }
+  .stage-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .stage-num {
+    width: 26px; height: 26px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 800; color: #fff; flex-shrink: 0;
+    background: #555;
+  }
+  .stage-name { font-size: 15px; font-weight: 800; color: #1f2937; }
+  .stage-rel-type { font-size: 10.5px; font-weight: 700; color: #374151; margin-bottom: 4px; }
+  .stage-desc { font-size: 10.5px; color: #555; line-height: 1.45; }
+
+  /* ═══ Gate routing labels ═══ */
+  .gate-routes {
+    margin-top: auto;
+    padding-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .gate-route {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 10px; color: #666;
+  }
+  .gate-route-icon {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .gate-route-pass {
+    border: 1.5px solid #22c55e; color: #16a34a;
+  }
+  .gate-route-escalate {
+    border: 1.5px solid #ef4444; color: #dc2626;
+  }
+
+  /* ═══ SVG overlay ═══ */
+  .svg-overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 10;
+  }
+
+  /* ═══ Caption ═══ */
+  .caption {
+    margin-top: 16px; font-size: 10.5px; color: #374151;
+    line-height: 1.65; font-family: 'Times New Roman', Georgia, serif;
+  }
+  .caption strong { font-weight: 700; }
+</style>
+</head>
+<body>
+
+<div class="figure">
+
+  <div class="top-label">
+    <span class="top-label-title">Coordination Space</span>
+    <span class="top-label-sub">BNA + Writing + Relationships</span>
+  </div>
+
+  <div class="main" id="main">
+    <div class="zones" id="zones">
+
+      <!-- Personal Space -->
+      <div class="zone zone-personal">
+        <div class="zone-label">Personal Space</div>
+        <div class="stage-box" id="sSense">
+          <div class="stage-header">
+            <div class="stage-num">1</div>
+            <div class="stage-name">Sense</div>
+          </div>
+          <div class="stage-rel-type">Writer ↔ BNA </div>
+          <div class="stage-desc">
+            Understand the current state of the coordination space and preview how potential changes would propagate
+          </div>
+        </div>
+      </div>
+
+      <!-- Gate -->
+      <div class="zone zone-gate">
+        <div class="zone-label">Boundary</div>
+        <div class="stage-box" id="sGate" style="flex:1;">
+          <div class="stage-header">
+            <div class="stage-num">2</div>
+            <div class="stage-name">Gate</div>
+          </div>
+          <div class="stage-desc">
+            Does this exceed the boundary?
+          </div>
+        </div>
+        <div class="gate-routes">
+          <div class="gate-route">
+            <div class="gate-route-icon gate-route-pass">✓</div>
+            Within boundary → personal action
+          </div>
+          <div class="gate-route">
+            <div class="gate-route-icon gate-route-escalate">!</div>
+            Crosses boundary → escalate to team
+          </div>
+        </div>
+      </div>
+
+      <!-- Team Space -->
+      <div class="zone zone-team">
+        <div class="zone-label">Team Space</div>
+        <div class="stage-box" id="sNeg">
+          <div class="stage-header">
+            <div class="stage-num">3</div>
+            <div class="stage-name">Negotiate</div>
+          </div>
+          <div class="stage-rel-type">Team ↔ BNA</div>
+          <div class="stage-desc">
+            Frame the change, deliberate with affected parties, reach resolution, update the shared understanding
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- SVG for arrows -->
+    <svg class="svg-overlay" id="svg"></svg>
+  </div>
+
+  <div class="caption">
+    <strong>Figure N.</strong> The coordination pipeline on the coordination space.
+    <strong>Sense</strong> builds awareness in personal space---both the current state of relationships and the consequences of potential changes.
+    <strong>Gate</strong> determines whether the change stays personal (within boundary, writer proceeds individually) or escalates to the team (crosses boundary).
+    <strong>Negotiate</strong> structures team deliberation and resolution; the updated BNA reshapes writing, triggering new sensing.
+    The pipeline cycles continuously as writing progresses; the Gate is the configurable boundary between individual autonomy and team coordination.
+  </div>
+</div>
+
+<script>
+function draw() {
+  const svg = document.getElementById('svg');
+  const main = document.getElementById('main');
+  const mR = main.getBoundingClientRect();
+
+  const sense = document.getElementById('sSense').getBoundingClientRect();
+  const gate = document.getElementById('sGate').getBoundingClientRect();
+  const neg = document.getElementById('sNeg').getBoundingClientRect();
+  const zones = document.getElementById('zones').getBoundingClientRect();
+
+  // Positions relative to main
+  const rel = (r) => ({
+    left: r.left - mR.left, right: r.right - mR.left,
+    top: r.top - mR.top, bottom: r.bottom - mR.top,
+    cx: r.left + r.width/2 - mR.left, cy: r.top + r.height/2 - mR.top,
+  });
+
+  const s = rel(sense), g = rel(gate), n = rel(neg), z = rel(zones);
+
+  svg.setAttribute('viewBox', `0 0 ${mR.width} ${mR.height}`);
+
+  svg.innerHTML = `
+    <defs>
+      <marker id="arr" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+        <path d="M0 0.5 L6 2.5 L0 4.5" fill="none" stroke="#888" stroke-width="1"/>
+      </marker>
+      <marker id="arrGreen" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+        <path d="M0 0.5 L6 2.5 L0 4.5" fill="none" stroke="#22c55e" stroke-width="1"/>
+      </marker>
+      <marker id="arrRed" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+        <path d="M0 0.5 L6 2.5 L0 4.5" fill="none" stroke="#ef4444" stroke-width="1"/>
+      </marker>
+      <marker id="arrCycle" markerWidth="7" markerHeight="5" refX="1" refY="2.5" orient="auto">
+        <path d="M6 0.5 L0 2.5 L6 4.5 Z" fill="#888"/>
+      </marker>
+    </defs>
+
+
+
+
+    <!-- Gate → back to Sense (pass, green, curved above) -->
+
+    <!-- Negotiate → Sense (cycle, dashed, curved below) -->
+    <path d="M${n.cx} ${z.bottom + 2}
+      L${n.cx} ${z.bottom + 18}
+      Q ${n.cx} ${z.bottom + 34} ${n.cx - 30} ${z.bottom + 36}
+      L ${s.cx + 30} ${z.bottom + 36}
+      Q ${s.cx} ${z.bottom + 34} ${s.cx} ${z.bottom + 18}
+      L ${s.cx} ${z.bottom + 2}"
+      fill="none" stroke="#888" stroke-width="1.6" stroke-dasharray="7 4"
+      marker-end="url(#arrCycle)"/>
+    <text x="${(s.cx + n.cx)/2}" y="${z.bottom + 48}" text-anchor="middle"
+      font-size="9.5" fill="#666" font-style="italic" font-family="Helvetica Neue, Arial">BNA updated → new cycle</text>
+  `;
+}
+window.addEventListener('load', draw);
+window.addEventListener('resize', draw);
+</script>
+
+</body>
+</html>
