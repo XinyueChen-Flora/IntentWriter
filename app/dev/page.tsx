@@ -289,6 +289,7 @@ function FunctionsContent({ functions, onRefresh }: { functions: FunctionDefinit
           { id: 'fn-api', label: 'registerFunction()' },
           { id: 'fn-executors', label: 'Executor Types' },
           { id: 'fn-display', label: 'Display Bindings' },
+          { id: 'fn-mutations', label: 'Mutations' },
           { id: 'fn-example', label: 'Complete Example' },
         ]},
         { heading: 'REGISTER & TEST', items: [{ id: 'fn-register', label: 'Register Custom' }] },
@@ -362,6 +363,32 @@ function FunctionsContent({ functions, onRefresh }: { functions: FunctionDefinit
   { type: 'node-icon', forEach: 'intents',
     params: { nodeId: '{{item.id}}', status: '{{item.status}}' } },
 ]`}</CodeBlock>
+      </SectionBlock>
+
+      <SectionBlock id="fn-mutations" title="Mutations (Outline Changes)">
+        <p className="mb-3">
+          Functions can return <code>mutations</code> to modify the outline. The runtime executes them —
+          functions stay pure (declare what to change, not how).
+        </p>
+        <CodeBlock>{`// In a local function's return value:
+return {
+  data: { action: 'apply', changes: [...] },
+  ui: [{ type: 'banner', params: { ... } }],
+  mutations: [
+    { type: 'update-block', blockId: 'xxx',
+      updates: { changeStatus: 'modified', changeBy: userId } },
+    { type: 'update-content', blockId: 'xxx', content: 'new text' },
+    { type: 'add-block', parentId: 'section-id', content: 'new intent',
+      updates: { changeStatus: 'added' } },
+    { type: 'delete-block', blockId: 'xxx' },
+  ],
+};`}</CodeBlock>
+        <FieldTable fields={[
+          ['update-block', '{ blockId, updates }', '', 'Update block metadata (changeStatus, etc.)'],
+          ['update-content', '{ blockId, content }', '', 'Update block text content'],
+          ['add-block', '{ parentId, content, updates? }', '', 'Add a new child block'],
+          ['delete-block', '{ blockId }', '', 'Delete a block'],
+        ]} />
       </SectionBlock>
 
       <SectionBlock id="fn-example" title="Complete Example">
@@ -468,12 +495,13 @@ function SenseContent({ protocols, onRefresh }: { protocols: SenseProtocolDefini
           ['name', 'string', 'required', 'Display name (what users see)'],
           ['description', 'string', 'required', 'What this sense capability does'],
           ['icon', 'string', 'required', 'Lucide icon name'],
-          ['functions', 'string[]', 'required', 'Function IDs to invoke (from the shared function pool)'],
+          ['steps', 'ProtocolStep[]', 'required', 'Step sequence (run functions, show results, present actions)'],
+          ['functions', 'string[]', 'required', 'Function IDs referenced by steps'],
           ['triggerOptions', 'TriggerOption[]', 'required', 'Trigger modes for users to choose from'],
           ['defaultTrigger', 'string', 'required', 'Which trigger is selected by default'],
-          ['gate', '{ conditions, suggestProtocol, allowOverride? }', 'optional', 'When to suggest team negotiation'],
           ['configFields', 'SenseConfigField[]', 'optional', 'User-tunable parameters'],
           ['defaultConfig', 'Record<string, unknown>', 'optional', 'Defaults for config fields'],
+          ['ui', 'UIBinding[]', 'optional', 'Protocol-level UI (e.g., "Check Drift" button)'],
         ]} />
       </SectionBlock>
 
@@ -501,23 +529,21 @@ function SenseContent({ protocols, onRefresh }: { protocols: SenseProtocolDefini
 defaultTrigger: 'on-change',`}</CodeBlock>
       </SectionBlock>
 
-      <SectionBlock id="aw-gate" title="Gate Conditions">
+      <SectionBlock id="aw-gate" title="Gate Exit">
         <p className="mb-3">
-          A Gate reads function output and suggests a negotiate protocol when conditions are met.
-          This is the bridge between individual sensing and team negotiation — when a function detects
-          something significant, the gate can automatically suggest that the team negotiate.
+          When a sense protocol step has an action with <code>gate: true</code>, clicking it exits
+          the sense protocol and enters the Gate. The Gate then routes to a negotiate protocol
+          based on rules configured by the team (see Gate tab).
         </p>
-        <CodeBlock>{`gate: {
-  conditions: [
-    { description: 'Cross-section impact detected',
-      functionId: 'assess-impact',
-      field: 'impacts',
-      operator: 'is-not-empty' },
-  ],
-  suggestProtocol: 'negotiate',  // → Team Vote
-  allowOverride: true,
-}`}</CodeBlock>
-        <p className="mt-2"><strong>Operators:</strong> <code>equals</code> <code>not-equals</code> <code>gt</code> <code>lt</code> <code>gte</code> <code>lte</code> <code>is-empty</code> <code>is-not-empty</code></p>
+        <CodeBlock>{`// In a sense protocol's steps:
+{ actions: [
+    { label: 'Propose Change', gate: true },  // ← exits to Gate
+    { label: 'Dismiss', stop: true },
+  ] }`}</CodeBlock>
+        <p className="mt-2 text-muted-foreground">
+          The Gate is a separate registered protocol (not part of the sense protocol).
+          Teams choose which gate to use (impact-based, manual, or fixed path) in MetaRule settings.
+        </p>
       </SectionBlock>
 
       <SectionBlock id="aw-register" title="Register & Test">
@@ -552,59 +578,165 @@ defaultTrigger: 'on-change',`}</CodeBlock>
 function GateContent() {
   const gates = getAllGates();
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-bold">Gate Protocols</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Gates sit between Sense and Negotiate, routing proposals to the right coordination path.
+    <SidebarLayout
+      sidebar={[
+        { heading: 'SPECIFICATION', items: [
+          { id: 'gate-overview', label: 'Overview' },
+          { id: 'gate-api', label: 'registerGate()' },
+          { id: 'gate-rules', label: 'Routing Rules' },
+          { id: 'gate-example', label: 'Complete Example' },
+        ]},
+        { heading: `LIBRARY (${gates.length})`, items: gates.map(g => ({ id: `gate-${g.id}`, label: g.name })) },
+      ]}
+    >
+      <SectionBlock id="gate-overview" title="Overview">
+        <p>
+          A Gate sits between Sense and Negotiate, deciding which coordination path a proposal should take.
+          Like Sense and Negotiate, a Gate uses <code>steps: ProtocolStep[]</code> — the same step system.
         </p>
-      </div>
-      {gates.map((gate) => (
-        <div key={gate.id} className="border rounded-xl bg-card p-5 space-y-3">
-          <div>
-            <div className="font-semibold">{gate.name}</div>
-            <div className="text-sm text-muted-foreground">{gate.description}</div>
-            <div className="text-xs font-mono text-muted-foreground mt-1">{gate.id}</div>
-          </div>
-          <div>
-            <div className="text-xs font-medium text-muted-foreground mb-1">Routes</div>
-            <div className="flex gap-2 flex-wrap">
-              {gate.routes.map((r) => (
-                <span key={r} className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">{r}</span>
-              ))}
-            </div>
-          </div>
-          {gate.defaultRules.length > 0 && (
-            <div>
-              <div className="text-xs font-medium text-muted-foreground mb-1">Rules</div>
-              {gate.defaultRules.map((rule, i) => (
-                <div key={i} className="text-xs flex items-center gap-2">
-                  <span className="text-primary">→</span>
-                  <span className="font-mono bg-muted px-1.5 py-0.5 rounded">{rule.then}</span>
-                  <span className="text-muted-foreground">{rule.description}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <div>
-            <div className="text-xs font-medium text-muted-foreground mb-1">Steps ({gate.steps.length})</div>
-            <div className="text-xs font-mono bg-muted/50 rounded p-2 overflow-x-auto">
-              {gate.steps.map((s, i) => (
-                <div key={i}>{s.id ? `[${s.id}] ` : ''}{s.run ? `run: ${s.run}` : ''}{s.actions ? `actions: [${s.actions.map(a => a.label).join(', ')}]` : ''}</div>
-              ))}
-            </div>
-          </div>
-          <div>
-            <div className="text-xs font-medium text-muted-foreground mb-1">Functions</div>
-            <div className="flex gap-2 flex-wrap">
-              {gate.functions.map((f) => (
-                <span key={f} className="text-xs bg-muted px-2 py-1 rounded font-mono">{f}</span>
-              ))}
-            </div>
-          </div>
+        <div className="flex items-center gap-2 flex-wrap text-sm font-mono py-3 px-4 bg-muted/30 rounded-lg border mt-3">
+          <span className="px-2.5 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200">Sense detects issue</span>
+          <span className="text-muted-foreground">→</span>
+          <span className="px-2.5 py-1 rounded bg-amber-50 text-amber-700 border border-amber-200 font-bold">Gate evaluates</span>
+          <span className="text-muted-foreground">→</span>
+          <span className="px-2.5 py-1 rounded bg-purple-50 text-purple-700 border border-purple-200">Negotiate begins</span>
         </div>
-      ))}
-    </div>
+        <p className="mt-3 text-muted-foreground">
+          Three modes: <strong>Impact-based</strong> (auto-routes by impact severity),
+          <strong> Manual</strong> (user picks), and <strong>Fixed</strong> (always same path — configured in MetaRule).
+        </p>
+      </SectionBlock>
+
+      <SectionBlock id="gate-api" title="registerGate(definition)">
+        <FieldTable fields={[
+          ['id', 'string', 'required', 'Unique identifier'],
+          ['name', 'string', 'required', 'Display name'],
+          ['description', 'string', 'optional', 'What this gate does'],
+          ['steps', 'ProtocolStep[]', 'required', 'Step sequence (run evaluate-gate, show route-picker, etc.)'],
+          ['functions', 'string[]', 'required', 'Function IDs used by this gate'],
+          ['reads', 'string[]', 'required', 'Function outputs to read for rule evaluation (e.g., assess-impact)'],
+          ['availableConditions', 'GateConditionField[]', 'required', 'Conditions teams can configure rules with'],
+          ['routes', 'string[]', 'required', 'Negotiate protocol IDs this gate can route to'],
+          ['defaultRules', 'GateRule[]', 'required', 'Default routing rules (team can override in MetaRule)'],
+          ['defaultRoute', 'string', 'required', 'Fallback route when no rule matches'],
+        ]} />
+      </SectionBlock>
+
+      <SectionBlock id="gate-rules" title="Routing Rules">
+        <p className="mb-3">
+          Rules are evaluated in order. Each rule has a <code>when</code> condition (checked against stored function output)
+          and a <code>then</code> target (a negotiate protocol ID). First match wins.
+        </p>
+        <CodeBlock>{`defaultRules: [
+  // Significant cross-section impact → Team Vote
+  { when: { 'assess-impact.maxSeverity': 'significant',
+             'assess-impact.scope': 'cross-section' },
+    then: 'negotiate',
+    description: 'Significant cross-section impact → Team Vote' },
+
+  // Any cross-section scope → Discussion
+  { when: { 'assess-impact.scope': 'cross-section' },
+    then: 'discussion',
+    description: 'Cross-section scope → Discussion' },
+
+  // Minor impact → Inform
+  { when: { 'assess-impact.maxSeverity': 'minor' },
+    then: 'decided',
+    description: 'Minor impact → Inform' },
+],
+defaultRoute: 'personal',  // no coordination needed`}</CodeBlock>
+        <p className="mt-2 text-muted-foreground">
+          <strong>Condition operators:</strong> Exact match, or objects with <code>gt</code>, <code>gte</code>, <code>equals</code>, <code>not</code>.
+        </p>
+      </SectionBlock>
+
+      <SectionBlock id="gate-example" title="Complete Example">
+        <CodeBlock>{`registerGate({
+  id: 'impact-based',
+  name: 'Impact-Based Routing',
+  description: 'Routes based on impact analysis results.',
+
+  steps: [
+    { run: 'evaluate-gate' },
+    { id: 'accept-route',
+      actions: [
+        { label: 'Continue', gate: true },
+        { label: 'Choose Path', goto: 'manual-override' },
+      ],
+      when: 'evaluate-gate.route != "personal"' },
+    { id: 'manual-override', run: 'render-route-choices' },
+    { actions: [
+        { label: 'Confirm', gate: true },
+        { label: 'Back', goto: 'accept-route' },
+      ] },
+  ],
+
+  functions: ['evaluate-gate', 'render-route-choices'],
+  reads: ['assess-impact'],
+  availableConditions: [
+    { field: 'assess-impact.maxSeverity', label: 'Impact severity',
+      options: ['minor', 'moderate', 'significant'] },
+    { field: 'assess-impact.scope', label: 'Impact scope',
+      options: ['same-section', 'cross-section'] },
+  ],
+  routes: ['negotiate', 'discussion', 'decided', 'personal'],
+  defaultRules: [
+    { when: { 'assess-impact.maxSeverity': 'significant' },
+      then: 'negotiate', description: 'High impact → Team Vote' },
+  ],
+  defaultRoute: 'personal',
+});`}</CodeBlock>
+      </SectionBlock>
+
+      {/* Library */}
+      <div className="relative py-4">
+        <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border" /></div>
+        <div className="relative flex justify-center">
+          <span className="bg-background px-4 text-sm font-bold text-muted-foreground uppercase tracking-widest">
+            Gate Library ({gates.length})
+          </span>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-4">
+        {gates.map((gate) => (
+          <div key={gate.id} id={`gate-${gate.id}`} className="scroll-mt-[60px] border rounded-xl bg-card p-5 space-y-3">
+            <div>
+              <div className="font-semibold">{gate.name}</div>
+              <div className="text-sm text-muted-foreground">{gate.description}</div>
+              <div className="text-xs font-mono text-muted-foreground mt-1">{gate.id}</div>
+            </div>
+            <div>
+              <div className="text-xs font-medium text-muted-foreground mb-1">Routes</div>
+              <div className="flex gap-2 flex-wrap">
+                {gate.routes.map((r) => (
+                  <span key={r} className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">{r}</span>
+                ))}
+              </div>
+            </div>
+            {gate.defaultRules.length > 0 && (
+              <div>
+                <div className="text-xs font-medium text-muted-foreground mb-1">Rules</div>
+                {gate.defaultRules.map((rule, i) => (
+                  <div key={i} className="text-xs flex items-center gap-2">
+                    <span className="text-primary">→</span>
+                    <span className="font-mono bg-muted px-1.5 py-0.5 rounded">{rule.then}</span>
+                    <span className="text-muted-foreground">{rule.description}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div>
+              <div className="text-xs font-medium text-muted-foreground mb-1">Steps ({gate.steps.length})</div>
+              <div className="text-xs font-mono bg-muted/50 rounded p-2 overflow-x-auto">
+                {gate.steps.map((s, i) => (
+                  <div key={i}>{s.id ? `[${s.id}] ` : ''}{s.run ? `run: ${s.run}` : ''}{s.actions ? `actions: [${s.actions.map(a => a.label).join(', ')}]` : ''}{s.when ? ` when: ${s.when}` : ''}</div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </SidebarLayout>
   );
 }
 
@@ -670,89 +802,104 @@ function NegotiateContent({ paths, onRefresh }: { paths: CoordinationPathDefinit
       </SectionBlock>
 
       <SectionBlock id="co-steps" title="Step Types">
-        <p className="mb-3">Each stage is a sequence of typed steps. The runtime renders them in order.</p>
+        <p className="mb-3">All three layers (Sense, Gate, Negotiate) share the same <code>ProtocolStep</code> type. The runtime walks steps in order.</p>
         <div className="space-y-3">
           <div className="border rounded-lg p-4">
             <div className="flex items-center gap-2 mb-2">
-              <code className="font-bold text-purple-600 bg-purple-50 px-2 py-0.5 rounded">run-function</code>
+              <code className="font-bold text-purple-600 bg-purple-50 px-2 py-0.5 rounded">run</code>
               <span className="text-muted-foreground">Execute a function and render its display bindings</span>
             </div>
-            <p className="text-sm text-muted-foreground">Example: Run <code>assess-impact</code> and render its impact cards and alerts. The function receives the current proposal context.</p>
-            <CodeBlock>{`{ type: 'run-function', functionId: 'assess-impact' }`}</CodeBlock>
+            <CodeBlock>{`{ run: 'assess-impact' }
+// With params:
+{ run: 'check-drift', params: { focus: '{{config.focusPrompt}}' } }`}</CodeBlock>
           </div>
           <div className="border rounded-lg p-4">
             <div className="flex items-center gap-2 mb-2">
-              <code className="font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">show-result</code>
+              <code className="font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">show</code>
               <span className="text-muted-foreground">Display a stored result without re-running</span>
             </div>
-            <p className="text-sm text-muted-foreground">Example: Show the impact analysis from the Propose stage so reviewers can see it without waiting for re-computation.</p>
-            <CodeBlock>{`{ type: 'show-result', functionId: 'assess-impact' }`}</CodeBlock>
+            <CodeBlock>{`{ show: 'frame-proposal' }
+// Reads from interaction store — no API call, instant`}</CodeBlock>
           </div>
           <div className="border rounded-lg p-4">
             <div className="flex items-center gap-2 mb-2">
-              <code className="font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">show-data</code>
-              <span className="text-muted-foreground">Render proposal data through primitives</span>
+              <code className="font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded">actions</code>
+              <span className="text-muted-foreground">Render buttons and pause for user choice</span>
             </div>
-            <p className="text-sm text-muted-foreground">Example: Show the draft items (what changed) as a result-list so the proposer can review their changes before submitting.</p>
-            <CodeBlock>{`{ type: 'show-data', dataKey: 'draftItems',
-  ui: [{ type: 'result-list', forEach: 'draftItems',
-    params: { title: '{{item.content}}', badge: '{{item.status}}' } }] }`}</CodeBlock>
+            <CodeBlock>{`{ actions: [
+    { label: 'Continue', continue: true },
+    { label: 'Propose Change', gate: true },
+    { label: 'Dismiss', stop: true },
+  ] }`}</CodeBlock>
           </div>
           <div className="border rounded-lg p-4">
             <div className="flex items-center gap-2 mb-2">
-              <code className="font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded">ui</code>
-              <span className="text-muted-foreground">Pure coordination UI (inputs, buttons, progress)</span>
+              <code className="font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">when</code>
+              <span className="text-muted-foreground">Conditional — skip step if condition is false</span>
             </div>
-            <p className="text-sm text-muted-foreground">Example: Show a text input for reasoning, or action buttons for voting. These are interactive primitives that collect user input.</p>
-            <CodeBlock>{`{ type: 'ui', ui: [
-  { type: 'text-input', params: { label: 'Why?', placeholder: 'Explain...', action: 'set-reasoning' } },
-] }`}</CodeBlock>
+            <CodeBlock>{`{ run: 'assess-impact',
+  when: 'check-drift.drift != "none"' }`}</CodeBlock>
+          </div>
+          <div className="border rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <code className="font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded">id</code>
+              <span className="text-muted-foreground">Named step — target for goto branching</span>
+            </div>
+            <CodeBlock>{`{ id: 'manual-override', run: 'render-route-choices' }
+// Jumped to via: { label: 'Override', goto: 'manual-override' }`}</CodeBlock>
           </div>
         </div>
       </SectionBlock>
 
-      <SectionBlock id="co-actions" title="Actions with Steps">
-        <p className="mb-3">
-          Any action can carry its own steps. A simple approve has no steps — just an effect.
-          A counter-propose might collect a text input and then re-run impact analysis.
-        </p>
-        <CodeBlock>{`actions: [
-  // Simple: no steps
-  { id: 'approve', label: 'Approve', effect: 'approve', availableTo: ['voter'] },
-  // With reasoning input
-  { id: 'reject', label: 'Reject', effect: 'reject', availableTo: ['voter'],
-    steps: [
-      { type: 'ui', ui: [{ type: 'text-input',
-          params: { label: 'Reason', action: 'set-reasoning' } }] },
-    ] },
-  // With function re-run
-  { id: 'counter-propose', label: 'Counter', effect: 'counter-propose', availableTo: ['voter'],
-    steps: [
-      { type: 'ui', ui: [{ type: 'text-input', params: { label: 'Alternative', action: 'set-counter' } }] },
-      { type: 'run-function', functionId: 'assess-impact' },
-      { type: 'run-function', functionId: 'preview-writing-impact' },
-    ] },
+      <SectionBlock id="co-actions" title="Action Types">
+        <p className="mb-3">Actions are buttons on a step or stage. Each action can carry sub-steps that run when clicked.</p>
+        <FieldTable fields={[
+          ['label', 'string', 'required', 'Button text'],
+          ['id', 'string', 'optional', 'Action identifier (passed to onActionSubmit)'],
+          ['continue', 'boolean', 'optional', 'Advance to the next step'],
+          ['goto', 'string', 'optional', 'Jump to a named step (by step.id)'],
+          ['gate', 'boolean', 'optional', 'Exit to Gate (Sense→Gate) or exit Gate (Gate→Negotiate)'],
+          ['stop', 'boolean', 'optional', 'Stop the protocol (dismiss/cancel)'],
+          ['steps', 'ProtocolStep[]', 'optional', 'Sub-steps to execute when clicked (e.g., run submit-vote)'],
+          ['who', 'string[]', 'optional', 'Role filter — only these roles see this action'],
+        ]} />
+        <CodeBlock>{`// Stage-level actions with sub-steps:
+actions: [
+  { id: 'approve', label: 'Approve',
+    steps: [{ run: 'submit-vote', params: { vote: 'approve' } }] },
+
+  { id: 'reject', label: 'Reject',
+    steps: [{ run: 'submit-vote', params: { vote: 'reject' } }] },
+
+  { id: 'close-approve', label: 'Apply Changes',
+    who: ['proposer'],
+    steps: [{ run: 'apply-proposal', params: { forceApply: 'true' } }] },
 ]`}</CodeBlock>
       </SectionBlock>
 
-      <SectionBlock id="co-resolution" title="Resolution Rules">
-        <p className="mb-3">The resolution rule determines when deliberation ends and the Resolve stage begins.</p>
+      <SectionBlock id="co-resolution" title="Resolution Functions">
+        <p className="mb-3">
+          Resolution is handled by registered functions, not hardcoded rules.
+          Team configures which function to use via <code>config.resolutionFn</code>.
+          The resolve stage&apos;s steps run the chosen function.
+        </p>
         <div className="space-y-2">
           {([
-            ['single-approval', 'One reviewer approves and the proposal passes'],
-            ['majority-vote', 'More than half of eligible voters approve'],
-            ['unanimous', 'All eligible voters must approve'],
-            ['threshold', 'A configurable number or percentage of approvals needed'],
-          ] as const).map(([type, desc]) => (
-            <div key={type} className="flex items-start gap-3 border rounded-lg px-4 py-2.5">
-              <code className="font-bold text-sm bg-muted px-2 py-0.5 rounded flex-shrink-0 mt-0.5">{type}</code>
+            ['check-majority', 'More than half of voters approve → approved'],
+            ['check-unanimous', 'All voters must approve → approved; any reject → rejected'],
+            ['check-single-approval', 'First vote decides (approve or reject)'],
+          ] as const).map(([fn, desc]) => (
+            <div key={fn} className="flex items-start gap-3 border rounded-lg px-4 py-2.5">
+              <code className="font-bold text-sm bg-muted px-2 py-0.5 rounded flex-shrink-0 mt-0.5">{fn}</code>
               <span className="text-sm text-muted-foreground">{desc}</span>
             </div>
           ))}
         </div>
-        <CodeBlock>{`resolution: { type: 'majority-vote' }
-// or
-resolution: { type: 'threshold', threshold: 3 }`}</CodeBlock>
+        <p className="mt-3 text-muted-foreground">
+          For <strong>Inform</strong>, the proposer applies changes immediately (no vote).
+          For <strong>Discussion</strong>, the proposer decides when to apply/drop.
+          For <strong>Team Vote</strong>, votes are tracked and the proposer sees the tally before deciding.
+        </p>
       </SectionBlock>
 
       <SectionBlock id="co-api" title="registerCoordinationPath(definition)">
